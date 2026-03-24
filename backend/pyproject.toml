@@ -20,7 +20,7 @@ dependencies = [
     "zep-cloud==3.13.0",
 
     # Graph memory (Graphiti)
-    "graphiti-core>=0.20.0",
+    "graphiti-core[anthropic]>=0.20.0",
 
     # OASIS social media simulation
     "camel-oasis==0.2.5",

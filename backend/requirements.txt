@@ -19,7 +19,7 @@ anthropic>=0.40.0
 zep-cloud==3.13.0
 
 # ============= Graph Memory =============
-graphiti-core>=0.20.0
+graphiti-core[anthropic]>=0.20.0
 
 # ============= OASIS Social Media Simulation =============
 # OASIS social simulation framework
