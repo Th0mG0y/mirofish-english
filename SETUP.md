@@ -144,14 +144,14 @@ If a command says it is not recognized:
 
 ## Step 2. Start Neo4j
 
-### Option A. Use Docker Desktop
+### Option A. Use Docker Desktop (recommended)
 
-This is the easiest option for most people.
+This is the easiest option for most people. The project includes a `docker-compose.yml` with a Neo4j service that uses persistent volumes, so your graph data survives container restarts.
 
-Run:
+From the project root, run:
 
 ```powershell
-docker run -d --name neo4j -p 7687:7687 -p 7474:7474 -e NEO4J_AUTH=neo4j/password neo4j:5.26
+docker compose up neo4j -d
 ```
 
 Then open:
@@ -163,10 +163,16 @@ Log in with:
 - username: `neo4j`
 - password: `password`
 
-If Docker says the container already exists, run:
+To stop Neo4j without losing data:
 
 ```powershell
-docker start neo4j
+docker compose stop neo4j
+```
+
+To start it again later:
+
+```powershell
+docker compose up neo4j -d
 ```
 
 ### Option B. Use Neo4j Desktop
@@ -477,7 +483,7 @@ Fix:
 
 1. Install Node.js, Python, `uv`, and Docker Desktop
 2. Create an OpenAI API key
-3. Start Neo4j
+3. Start Neo4j: `docker compose up neo4j -d`
 4. Copy `.env.openai.example` to `.env`
 5. Fill in your OpenAI key
 6. Run `npm run setup:all`
@@ -490,7 +496,7 @@ Fix:
 
 1. Install Node.js, Python, `uv`, and Docker Desktop
 2. Create an Anthropic API key
-3. Start Neo4j
+3. Start Neo4j: `docker compose up neo4j -d`
 4. Create an OpenAI API key
 5. Copy `.env.anthropic.example` to `.env`
 6. Fill in your Anthropic key and OpenAI key
@@ -502,7 +508,7 @@ Fix:
 ### All local via LM Studio
 
 1. Install Node.js, Python, `uv`, Docker Desktop, and LM Studio
-2. Start Neo4j
+2. Start Neo4j: `docker compose up neo4j -d`
 3. Load a chat model and an embedding model in LM Studio
 4. Start the LM Studio local server on port `1234`
 5. Copy `.env.lmstudio.example` to `.env`
@@ -515,7 +521,7 @@ Fix:
 ### All local via Ollama
 
 1. Install Node.js, Python, `uv`, Docker Desktop, and Ollama
-2. Start Neo4j
+2. Start Neo4j: `docker compose up neo4j -d`
 3. Run `ollama pull nomic-embed-text`
 4. Make sure your Ollama chat model is also pulled
 5. Copy `.env.ollama.example` to `.env`

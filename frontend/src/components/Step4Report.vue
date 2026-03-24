@@ -2054,6 +2054,13 @@ const fetchAgentLog = async () => {
             stopPolling()
             // Scroll logic is unified in nextTick after the loop ends
           }
+
+          if (log.action === 'error') {
+            isComplete.value = true
+            currentSectionIndex.value = null
+            emit('update-status', 'error')
+            stopPolling()
+          }
           
           if (log.action === 'report_start') {
             startTime.value = new Date(log.timestamp)

@@ -13,12 +13,11 @@ import json
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
-from zep_cloud.client import Zep
-
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.llm_client import LLMClient
 from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
+from .zep_entity_reader import ZepEntityReader
 
 logger = get_logger('mirofish.zep_tools')
 
@@ -423,13 +422,9 @@ class ZepToolsService:
 
     def __init__(self, api_key: Optional[str] = None, llm_client: Optional[LLMClient] = None):
         self.api_key = api_key or Config.ZEP_API_KEY
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY is not configured")
-
-        self.client = Zep(api_key=self.api_key)
         # LLM client for InsightForge sub-query generation
         self._llm_client = llm_client
-        logger.info("ZepToolsService initialized successfully")
+        logger.info("ZepToolsService initialized (using local Neo4j graph)")
 
     @property
     def llm(self) -> LLMClient:
@@ -485,63 +480,8 @@ class ZepToolsService:
         """
         logger.info(f"Graph search: graph_id={graph_id}, query={query[:50]}...")
 
-        # Attempt to use Zep Cloud Search API
-        try:
-            search_results = self._call_with_retry(
-                func=lambda: self.client.graph.search(
-                    graph_id=graph_id,
-                    query=query,
-                    limit=limit,
-                    scope=scope,
-                    reranker="cross_encoder"
-                ),
-                operation_name=f"graph search (graph={graph_id})"
-            )
-
-            facts = []
-            edges = []
-            nodes = []
-
-            # Parse edge search results
-            if hasattr(search_results, 'edges') and search_results.edges:
-                for edge in search_results.edges:
-                    if hasattr(edge, 'fact') and edge.fact:
-                        facts.append(edge.fact)
-                    edges.append({
-                        "uuid": getattr(edge, 'uuid_', None) or getattr(edge, 'uuid', ''),
-                        "name": getattr(edge, 'name', ''),
-                        "fact": getattr(edge, 'fact', ''),
-                        "source_node_uuid": getattr(edge, 'source_node_uuid', ''),
-                        "target_node_uuid": getattr(edge, 'target_node_uuid', ''),
-                    })
-            
-            # Parse node search results
-            if hasattr(search_results, 'nodes') and search_results.nodes:
-                for node in search_results.nodes:
-                    nodes.append({
-                        "uuid": getattr(node, 'uuid_', None) or getattr(node, 'uuid', ''),
-                        "name": getattr(node, 'name', ''),
-                        "labels": getattr(node, 'labels', []),
-                        "summary": getattr(node, 'summary', ''),
-                    })
-                    # Node summaries also count as facts
-                    if hasattr(node, 'summary') and node.summary:
-                        facts.append(f"[{node.name}]: {node.summary}")
-
-            logger.info(f"Search complete: found {len(facts)} relevant facts")
-
-            return SearchResult(
-                facts=facts,
-                edges=edges,
-                nodes=nodes,
-                query=query,
-                total_count=len(facts)
-            )
-
-        except Exception as e:
-            logger.warning(f"Zep Search API failed, falling back to local search: {str(e)}")
-            # Fallback: use local keyword matching search
-            return self._local_search(graph_id, query, limit, scope)
+        # Use local keyword matching search against Neo4j graph data
+        return self._local_search(graph_id, query, limit, scope)
     
     def _local_search(
         self,
@@ -659,7 +599,7 @@ class ZepToolsService:
         """
         logger.info(f"Retrieving all nodes in graph {graph_id}...")
 
-        nodes = fetch_all_nodes(self.client, graph_id)
+        nodes = fetch_all_nodes(graph_id)
 
         result = []
         for node in nodes:
@@ -688,7 +628,7 @@ class ZepToolsService:
         """
         logger.info(f"Retrieving all edges in graph {graph_id}...")
 
-        edges = fetch_all_edges(self.client, graph_id)
+        edges = fetch_all_edges(graph_id)
 
         result = []
         for edge in edges:
@@ -713,12 +653,13 @@ class ZepToolsService:
         logger.info(f"Retrieved {len(result)} edges")
         return result
 
-    def get_node_detail(self, node_uuid: str) -> Optional[NodeInfo]:
+    def get_node_detail(self, node_uuid: str, graph_id: str = "") -> Optional[NodeInfo]:
         """
         Get detailed information for a single node
 
         Args:
             node_uuid: Node UUID
+            graph_id: Graph ID for scoping the search
 
         Returns:
             Node information or None
@@ -726,21 +667,12 @@ class ZepToolsService:
         logger.info(f"Getting node detail: {node_uuid[:8]}...")
 
         try:
-            node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=node_uuid),
-                operation_name=f"get node detail (uuid={node_uuid[:8]}...)"
-            )
-            
-            if not node:
-                return None
-            
-            return NodeInfo(
-                uuid=getattr(node, 'uuid_', None) or getattr(node, 'uuid', ''),
-                name=node.name or "",
-                labels=node.labels or [],
-                summary=node.summary or "",
-                attributes=node.attributes or {}
-            )
+            if graph_id:
+                all_nodes = self.get_all_nodes(graph_id)
+                for node in all_nodes:
+                    if node.uuid == node_uuid:
+                        return node
+            return None
         except Exception as e:
             logger.error(f"Failed to get node detail: {str(e)}")
             return None
@@ -1043,7 +975,7 @@ class ZepToolsService:
                 continue
             try:
                 # Get each related node's information individually
-                node = self.get_node_detail(uuid)
+                node = self.get_node_detail(uuid, graph_id=graph_id)
                 if node:
                     node_map[uuid] = node
                     entity_type = next((l for l in node.labels if l not in ["Entity", "Node"]), "Entity")

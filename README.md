@@ -134,18 +134,21 @@ For this Graphiti + Neo4j implementation, the recommended path is:
 From the project root:
 
 ```bash
-# 1. Copy the environment file
+# 1. Start Neo4j (persistent data via Docker volume)
+docker compose up neo4j -d
+
+# 2. Copy the environment file
 cp .env.openai.example .env
 
-# 2. Install root + frontend + backend dependencies
+# 3. Install root + frontend + backend dependencies
 npm run setup:all
 
-# 3. Install the extra packages required by this Graphiti build
+# 4. Install the extra packages required by this Graphiti build
 cd backend
 uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
 cd ..
 
-# 4. Start both frontend and backend
+# 5. Start both frontend and backend
 npm run dev
 ```
 
@@ -177,9 +180,21 @@ When you run `npm run dev`, the local addresses are:
 
 ### Docker Note
 
-The included `docker-compose.yml` does **not** start Neo4j for you.
+The included `docker-compose.yml` includes a Neo4j service with persistent volumes.
 
-If you use Docker for the app container, you still need to start Neo4j separately and point `.env` to it.
+To start Neo4j before running the app:
+
+```bash
+docker compose up neo4j -d
+```
+
+This stores graph data in a Docker volume so it survives container restarts.
+
+If you use Docker for the full stack:
+
+```bash
+docker compose up -d
+```
 
 ### Important Note About Zep
 

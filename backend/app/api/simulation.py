@@ -1,6 +1,6 @@
 """
 Simulation-related API routes
-Step2: Zep entity reading and filtering, OASIS simulation preparation and execution (fully automated)
+Step2: Graph entity reading and filtering, OASIS simulation preparation and execution (fully automated)
 """
 
 import os
@@ -370,7 +370,7 @@ def prepare_simulation():
 
     Steps:
     1. Check if there is already completed preparation work
-    2. Read and filter entities from Zep graph
+    2. Read and filter entities from graph database
     3. Generate OASIS Agent Profile for each entity (with retry mechanism)
     4. LLM intelligently generates simulation configuration (with retry mechanism)
     5. Save configuration files and preset scripts
@@ -584,12 +584,16 @@ def prepare_simulation():
                     progress_callback=progress_callback,
                     parallel_profile_count=parallel_profile_count
                 )
-                
-                # Task complete
-                task_manager.complete_task(
-                    task_id,
-                    result=result_state.to_simple_dict()
-                )
+
+                # Check if preparation actually succeeded
+                if result_state.status == SimulationStatus.FAILED:
+                    error_msg = result_state.error or "Preparation failed: 0 entities found in graph. Make sure Neo4j is running and rebuild the graph."
+                    task_manager.fail_task(task_id, error_msg)
+                else:
+                    task_manager.complete_task(
+                        task_id,
+                        result=result_state.to_simple_dict()
+                    )
                 
             except Exception as e:
                 logger.error(f"Simulation preparation failed: {str(e)}")
@@ -1453,7 +1457,7 @@ def start_simulation():
             "simulation_id": "sim_xxxx",          // Required, simulation ID
             "platform": "parallel",                // Optional: twitter / reddit / parallel (default)
             "max_rounds": 100,                     // Optional: maximum simulation rounds, used to truncate overly long simulations
-            "enable_graph_memory_update": false,   // Optional: whether to dynamically update Agent activities to Zep graph memory
+            "enable_graph_memory_update": false,   // Optional: whether to dynamically update Agent activities to graph memory
             "force": false                         // Optional: force restart (stops running simulation and clears logs)
         }
 
@@ -1464,7 +1468,7 @@ def start_simulation():
         - Suitable for scenarios where simulation needs to be rerun
 
     About enable_graph_memory_update:
-        - When enabled, all Agent activities (posting, commenting, liking, etc.) during simulation are updated to the Zep graph in real-time
+        - When enabled, all Agent activities (posting, commenting, liking, etc.) during simulation are updated to the graph database in real-time
         - This allows the graph to "remember" the simulation process for subsequent analysis or AI conversation
         - Requires the associated project to have a valid graph_id
         - Uses batch update mechanism to reduce API call count
