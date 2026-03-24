@@ -152,6 +152,25 @@ cd ..
 npm run dev
 ```
 
+### One-Click Start
+
+Instead of running each step manually, use the provided setup script:
+
+**Windows (PowerShell):**
+```powershell
+.\start.ps1
+```
+
+**macOS / Linux (Bash):**
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+The script will check for required dependencies (Python 3.11+, Node 18+, Docker, uv) and **install any that are missing** (via `winget` on Windows, or `brew`/`apt`/`dnf`/`pacman` on macOS/Linux), then start Neo4j, install all project packages, and launch the app.
+
+> **Note:** You still need to edit `.env` with your API keys before the app will work. The script copies `.env.openai.example` as a starting point if no `.env` exists.
+
 ### Required Services For This Version
 
 Before starting the app, make sure you have all of these ready:

@@ -4,6 +4,29 @@ This guide is written for someone who wants the app to run without guessing.
 
 Read it once from top to bottom before you start.
 
+## Quick Start (One-Click Setup)
+
+If you just want to get running as fast as possible, use the automated setup script. It will check for required tools, install any that are missing, start Neo4j, install all project dependencies, and launch the app.
+
+**Windows (PowerShell):**
+
+```powershell
+.\start.ps1
+```
+
+**macOS / Linux (Bash):**
+
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+> **Note:** You still need to edit `.env` with your API keys before the app will work. The script copies `.env.openai.example` as a starting point if no `.env` exists. See [Accounts And Keys You May Need](#accounts-and-keys-you-may-need) below for how to get API keys.
+
+If you prefer to set things up manually, or need a non-default provider configuration, continue reading below.
+
+---
+
 ## What Is Different In This Version
 
 This repository no longer uses Zep Cloud for graph building.
@@ -478,6 +501,8 @@ Fix:
 2. keep `MIROFISH_SEARCH_PROVIDER=anthropic` or a real OpenAI account
 
 ## Simplest Working Checklists
+
+> **Tip:** For the OpenAI-only setup you can skip all manual steps and just run `.\start.ps1` (Windows) or `./start.sh` (macOS/Linux). The script handles everything below automatically — you only need to fill in your API key in `.env` afterwards.
 
 ### OpenAI-only
 
