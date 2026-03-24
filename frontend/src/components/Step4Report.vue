@@ -374,18 +374,6 @@
       </div>
     </div>
 
-    <!-- Bottom Console Logs -->
-    <div class="console-logs">
-      <div class="log-header">
-        <span class="log-title">CONSOLE OUTPUT</span>
-        <span class="log-id">{{ reportId || 'NO_REPORT' }}</span>
-      </div>
-      <div class="log-content" ref="logContent">
-        <div class="log-line" v-for="(log, idx) in consoleLogs" :key="idx">
-          <span class="log-msg" :class="getLogLevelClass(log)">{{ log }}</span>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -426,7 +414,6 @@ const isComplete = ref(false)
 const startTime = ref(null)
 const leftPanel = ref(null)
 const rightPanel = ref(null)
-const logContent = ref(null)
 const showRawResult = reactive({})
 
 // Toggle functions
@@ -2005,13 +1992,6 @@ const getActionLabel = (action) => {
   return labels[action] || action
 }
 
-const getLogLevelClass = (log) => {
-  if (log.includes('ERROR')) return 'error'
-  if (log.includes('WARNING')) return 'warning'
-  // INFO uses default colour, not marked as success
-  return ''
-}
-
 // Polling
 let agentLogTimer = null
 let consoleLogTimer = null
@@ -2143,12 +2123,6 @@ const fetchConsoleLog = async () => {
       if (newLogs.length > 0) {
         consoleLogs.value.push(...newLogs)
         consoleLogLine.value = res.data.from_line + newLogs.length
-        
-        nextTick(() => {
-          if (logContent.value) {
-            logContent.value.scrollTop = logContent.value.scrollHeight
-          }
-        })
       }
     }
   } catch (err) {
@@ -5104,54 +5078,4 @@ watch(() => props.reportId, (newId) => {
   border-radius: 4px;
 }
 
-/* Console Logs – consistent with Step3Simulation.vue */
-.console-logs {
-  background: #000;
-  color: #DDD;
-  padding: 16px;
-  font-family: 'JetBrains Mono', monospace;
-  border-top: 1px solid #222;
-  flex-shrink: 0;
-}
-
-.log-header {
-  display: flex;
-  justify-content: space-between;
-  border-bottom: 1px solid #333;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
-  font-size: 10px;
-  color: #666;
-}
-
-.log-title {
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.log-content {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  height: 100px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.log-content::-webkit-scrollbar { width: 4px; }
-.log-content::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
-
-.log-line {
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.log-msg {
-  color: #BBB;
-  word-break: break-all;
-}
-
-.log-msg.error { color: #EF5350; }
-.log-msg.warning { color: #FFA726; }
-.log-msg.success { color: #66BB6A; }
 </style>

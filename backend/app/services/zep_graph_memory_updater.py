@@ -311,18 +311,11 @@ class ZepGraphMemoryUpdater:
         """Stop the background worker thread"""
         self._running = False
 
-        # Flush remaining activities
-        self._flush_remaining()
-
+        # Wait for the worker thread to finish (it will drain the queue,
+        # flush remaining activities, close Graphiti, and clean up its own
+        # event loop - all from within the worker thread).
         if self._worker_thread and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=10)
-
-        # Close the Graphiti client if it was created
-        if self._graphiti and self._loop:
-            try:
-                self._loop.run_until_complete(self._graphiti.close())
-            except Exception:
-                pass
+            self._worker_thread.join(timeout=30)
 
         logger.info(f"GraphMemoryUpdater stopped: graph_id={self.graph_id}, "
                     f"total_activities={self._total_activities}, "
@@ -428,6 +421,17 @@ class ZepGraphMemoryUpdater:
             except Exception as e:
                 logger.error(f"Worker loop error: {e}")
                 time.sleep(1)
+
+        # Flush remaining activities (still on the worker thread with the loop)
+        self._flush_remaining()
+
+        # Close the Graphiti client
+        if self._graphiti:
+            try:
+                self._loop.run_until_complete(self._graphiti.close())
+            except Exception:
+                pass
+            self._graphiti = None
 
         # Clean up event loop
         try:

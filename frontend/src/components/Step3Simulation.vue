@@ -278,37 +278,16 @@
       </div>
     </div>
 
-    <!-- Bottom Info / Logs -->
-    <div class="system-logs">
-      <div class="log-header">
-        <div class="log-header-left">
-          <span class="log-dot log-dot-active"></span>
-          <span class="log-title">SIMULATION MONITOR</span>
-        </div>
-        <div class="log-header-right">
-          <span class="log-count">{{ systemLogs?.length || 0 }} events</span>
-          <span class="log-id">{{ simulationId || 'NO_SIMULATION' }}</span>
-        </div>
-      </div>
-      <div class="log-content" ref="logContent">
-        <div class="log-line" v-for="(log, idx) in systemLogs" :key="idx">
-          <span class="log-time">{{ log.time }}</span>
-          <span class="log-prefix">▸</span>
-          <span class="log-msg" :class="getLogClass(log.msg)">{{ log.msg }}</span>
-        </div>
-        <div v-if="!systemLogs?.length" class="log-empty">Waiting for events...</div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { 
-  startSimulation, 
+import {
+  startSimulation,
   stopSimulation,
-  getRunStatus, 
+  getRunStatus,
   getRunStatusDetail
 } from '../api/simulation'
 import { generateReport } from '../api/report'
@@ -735,25 +714,6 @@ const handleDeliberation = async () => {
   }
 }
 
-// Scroll log to bottom
-const logContent = ref(null)
-watch(() => props.systemLogs?.length, () => {
-  nextTick(() => {
-    if (logContent.value) {
-      logContent.value.scrollTop = logContent.value.scrollHeight
-    }
-  })
-})
-
-const getLogClass = (msg) => {
-  const lower = msg.toLowerCase()
-  if (/error|exception|failed|fail|invalid/.test(lower)) return 'log-msg-error'
-  if (/complete|completed|success|done|finished|started/.test(lower)) return 'log-msg-success'
-  if (/starting|round|running|polling|processing|waiting|sending/.test(lower)) return 'log-msg-info'
-  if (/warn|skip|missing/.test(lower)) return 'log-msg-warn'
-  return ''
-}
-
 onMounted(() => {
   addLog('Step3 Simulation Run Initialising')
   if (props.simulationId) {
@@ -785,7 +745,16 @@ onUnmounted(() => {
   align-items: center;
   border-bottom: 1px solid #EAEAEA;
   z-index: 10;
-  height: 64px;
+  min-height: 64px;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.action-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .status-group {
@@ -942,9 +911,11 @@ onUnmounted(() => {
 .action-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  font-size: 13px;
+  justify-content: center;
+  gap: 6px;
+  padding: 3px 5px;
+  font-size: 8px;
+  white-space: nowrap;
   font-weight: 600;
   border: none;
   border-radius: 4px;
@@ -1286,121 +1257,6 @@ onUnmounted(() => {
 
 .timeline-item-leave-to {
   opacity: 0;
-}
-
-/* Logs */
-.system-logs {
-  background: #0D1117;
-  padding: 12px 16px;
-  font-family: 'JetBrains Mono', monospace;
-  border-top: 1px solid #1C2128;
-  flex-shrink: 0;
-}
-
-.log-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid #21262D;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
-}
-
-.log-header-left {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.log-header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.log-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #30363D;
-  flex-shrink: 0;
-}
-
-.log-dot.log-dot-active {
-  background: #3FB950;
-  box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.25);
-  animation: pulse-dot 2s ease-in-out infinite;
-}
-
-@keyframes pulse-dot {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.25); }
-  50% { box-shadow: 0 0 0 4px rgba(63, 185, 80, 0.1); }
-}
-
-.log-title {
-  font-size: 10px;
-  font-weight: 600;
-  color: #8B949E;
-  letter-spacing: 0.08em;
-}
-
-.log-count {
-  font-size: 10px;
-  color: #30363D;
-}
-
-.log-id {
-  font-size: 10px;
-  color: #484F58;
-}
-
-.log-content {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  height: 130px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.log-content::-webkit-scrollbar { width: 3px; }
-.log-content::-webkit-scrollbar-track { background: transparent; }
-.log-content::-webkit-scrollbar-thumb { background: #30363D; border-radius: 2px; }
-
-.log-line {
-  font-size: 11px;
-  display: flex;
-  gap: 8px;
-  line-height: 1.6;
-  align-items: baseline;
-}
-
-.log-time {
-  color: #484F58;
-  min-width: 75px;
-  flex-shrink: 0;
-}
-
-.log-prefix {
-  color: #30363D;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.log-msg {
-  color: #8B949E;
-  word-break: break-all;
-}
-
-.log-msg-error   { color: #F85149; }
-.log-msg-success { color: #3FB950; }
-.log-msg-info    { color: #58A6FF; }
-.log-msg-warn    { color: #D29922; }
-
-.log-empty {
-  font-size: 11px;
-  color: #30363D;
-  font-style: italic;
 }
 
 .mono { font-family: 'JetBrains Mono', monospace; }
