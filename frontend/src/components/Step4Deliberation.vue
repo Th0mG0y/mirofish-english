@@ -145,12 +145,21 @@
       <div class="synthesis-content" v-html="renderMarkdown(session.synthesis)"></div>
     </div>
 
-    <!-- Navigation Buttons (after completion) -->
-    <div v-if="isComplete" class="navigation-section">
-      <button class="nav-btn secondary" @click="backToSimulation">
+    <!-- Error State -->
+    <div v-if="errorMessage" class="error-banner">
+      <div class="error-content">
+        <span class="error-icon">!</span>
+        <span class="error-text">{{ errorMessage }}</span>
+      </div>
+      <p class="error-hint">You can go back to the simulation and generate the report from there, or retry the debate.</p>
+    </div>
+
+    <!-- Navigation Buttons (always visible when session loaded) -->
+    <div v-if="session && !loading" class="navigation-section">
+      <button class="nav-btn secondary" @click="backToSimulation" :disabled="running">
         Back to Simulation
       </button>
-      <button class="nav-btn primary" :disabled="generatingReport" @click="handleGenerateReport">
+      <button v-if="isComplete" class="nav-btn primary" :disabled="generatingReport" @click="handleGenerateReport">
         {{ generatingReport ? 'Creating Report...' : 'Generate Report' }}
       </button>
     </div>
@@ -158,6 +167,9 @@
     <!-- Empty State -->
     <div v-if="!session && !loading" class="empty-state">
       <p>No deliberation session loaded.</p>
+      <button class="nav-btn secondary" style="margin-top: 12px" @click="backToSimulation">
+        Back to Simulation
+      </button>
     </div>
 
     <!-- Loading -->
@@ -193,6 +205,7 @@ const loading = ref(true)
 const running = ref(false)
 const currentPhase = ref('idle') // idle | debating | voting | synthesizing | done
 const generatingReport = ref(false)
+const errorMessage = ref('')
 
 function notify(title, body) {
   if (!('Notification' in window)) return
@@ -238,8 +251,6 @@ const phaseProgressText = computed(() => {
 
 const canRunDebate = computed(() => {
   if (!session.value) return false
-  // Allow re-run only if no rounds exist yet (or session failed)
-  if (session.value.rounds?.length > 0) return false
   return ['created', 'failed'].includes(session.value.status)
 })
 
@@ -288,6 +299,7 @@ async function loadSession() {
 async function startDebate() {
   running.value = true
   currentPhase.value = 'debating'
+  errorMessage.value = ''
   emit('update-status', 'debating')
   try {
     const res = await runDebate(props.sessionId, 3)
@@ -299,7 +311,10 @@ async function startDebate() {
     console.error('Debate failed:', e)
     currentPhase.value = 'idle'
     emit('update-status', 'error')
+    errorMessage.value = e?.response?.data?.error || e?.message || 'The debate failed. You can retry or go back to generate the report from the simulation.'
     notify('Debate Failed', 'An error occurred during the debate.')
+    // Reload session to get latest state (may have partial results)
+    await loadSession()
   } finally {
     running.value = false
   }
@@ -308,6 +323,7 @@ async function startDebate() {
 async function startVoting() {
   running.value = true
   currentPhase.value = 'voting'
+  errorMessage.value = ''
   emit('update-status', 'voting')
   try {
     await conductVoting(props.sessionId)
@@ -317,6 +333,7 @@ async function startVoting() {
     console.error('Voting failed:', e)
     currentPhase.value = 'idle'
     emit('update-status', 'error')
+    errorMessage.value = e?.response?.data?.error || e?.message || 'Voting failed.'
     notify('Voting Failed', 'An error occurred during voting.')
   } finally {
     running.value = false
@@ -326,6 +343,7 @@ async function startVoting() {
 async function startSynthesis() {
   running.value = true
   currentPhase.value = 'synthesizing'
+  errorMessage.value = ''
   emit('update-status', 'synthesizing')
   try {
     await synthesize(props.sessionId)
@@ -335,6 +353,7 @@ async function startSynthesis() {
     console.error('Synthesis failed:', e)
     currentPhase.value = 'idle'
     emit('update-status', 'error')
+    errorMessage.value = e?.response?.data?.error || e?.message || 'Synthesis failed.'
     notify('Synthesis Failed', 'An error occurred during synthesis.')
   } finally {
     running.value = false
@@ -728,6 +747,40 @@ onMounted(() => {
 .nav-btn.primary:hover:not(:disabled) { background: #1565C0; }
 .nav-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Navigation */
+.navigation-section {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 0;
+  border-top: 1px solid #EAEAEA;
+  margin-top: 8px;
+}
+
+.nav-btn {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nav-btn.secondary {
+  background: #FFF;
+  border: 1px solid #DDD;
+  color: #555;
+}
+.nav-btn.secondary:hover { background: #F5F5F5; border-color: #BBB; }
+
+.nav-btn.primary {
+  background: #1976D2;
+  border: 1px solid #1565C0;
+  color: #FFF;
+}
+.nav-btn.primary:hover:not(:disabled) { background: #1565C0; }
+.nav-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Empty / Loading */
 .empty-state, .loading-state {
   text-align: center;
@@ -747,5 +800,46 @@ onMounted(() => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Error Banner */
+.error-banner {
+  background: #FFF5F5;
+  border: 1px solid #FFCDD2;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.error-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #F44336;
+  color: #FFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.error-text {
+  font-size: 13px;
+  color: #C62828;
+  font-weight: 500;
+}
+
+.error-hint {
+  font-size: 12px;
+  color: #999;
+  margin: 8px 0 0 32px;
 }
 </style>

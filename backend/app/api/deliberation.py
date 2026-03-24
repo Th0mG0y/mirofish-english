@@ -98,11 +98,19 @@ def run_debate(session_id: str):
         if not session:
             return jsonify({"success": False, "error": f"Session not found: {session_id}"}), 404
 
-        if session.status not in [DeliberationStatus.CREATED, DeliberationStatus.FAILED]:
+        if session.status not in [DeliberationStatus.CREATED, DeliberationStatus.FAILED, DeliberationStatus.DEBATING]:
             return jsonify({
                 "success": False,
                 "error": f"Session is not in a state to run debate: {session.status.value}"
             }), 400
+
+        # Clear any partial results from a previous failed attempt
+        if session.status in [DeliberationStatus.FAILED, DeliberationStatus.DEBATING]:
+            session.rounds = []
+
+        # Persist DEBATING status immediately so duplicate requests are rejected
+        session.status = DeliberationStatus.DEBATING
+        DeliberationManager.update(session)
 
         # Run debate synchronously (can be made async if needed)
         engine = CouncilEngine()
