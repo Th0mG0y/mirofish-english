@@ -329,7 +329,10 @@ const pollTaskStatus = async (taskId) => {
         addLog(task.message)
       }
       
-      buildProgress.value = { progress: task.progress || 0, message: task.message }
+      buildProgress.value = {
+        progress: Number(task.progress ?? 0),
+        message: task.message
+      }
       
       if (task.status === 'completed') {
         addLog('Graph build task completed.')

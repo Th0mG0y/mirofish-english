@@ -402,89 +402,98 @@ def build_graph():
                 task_manager.update_task(
                     task_id,
                     status=TaskStatus.PROCESSING,
-                    message="Initializing graph build service..."
+                    message="Initializing graph build service...",
+                    progress=2,
                 )
 
-                # Create graph build service
                 builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
 
-                # Split text into chunks
-                task_manager.update_task(
-                    task_id,
-                    message="Splitting text into chunks...",
-                    progress=5
-                )
+                def on_split_progress(frac: float) -> None:
+                    task_manager.update_task(
+                        task_id,
+                        message=f"Splitting document… {min(100, int(frac * 100))}%",
+                        progress=round(3 + min(1.0, frac) * 11, 1),
+                    )
+
                 chunks = TextProcessor.split_text(
                     text,
                     chunk_size=chunk_size,
-                    overlap=chunk_overlap
+                    overlap=chunk_overlap,
+                    on_progress=on_split_progress,
                 )
                 total_chunks = len(chunks)
 
-                # Create graph
                 task_manager.update_task(
                     task_id,
-                    message="Creating Zep graph...",
-                    progress=10
+                    message=f"Prepared {total_chunks} text chunks",
+                    progress=14,
+                )
+
+                task_manager.update_task(
+                    task_id,
+                    message="Creating graph workspace...",
+                    progress=15,
                 )
                 graph_id = builder.create_graph(name=graph_name)
 
-                # Update project's graph_id
                 project.graph_id = graph_id
                 ProjectManager.save_project(project)
 
-                # Set ontology
                 task_manager.update_task(
                     task_id,
-                    message="Setting ontology definition...",
-                    progress=15
+                    message="Applying ontology definition...",
+                    progress=16,
                 )
                 builder.set_ontology(graph_id, ontology)
 
-                # Add text (progress_callback signature is (msg, progress_ratio))
+                def phase_hook(phase: str) -> None:
+                    if phase == "indices_start":
+                        task_manager.update_task(
+                            task_id,
+                            message="Creating graph database indexes (first run can be slow)...",
+                            progress=17,
+                        )
+                    elif phase == "indices_end":
+                        task_manager.update_task(
+                            task_id,
+                            message="Sending chunks to graph engine...",
+                            progress=19,
+                        )
+
                 def add_progress_callback(msg, progress_ratio):
-                    progress = 15 + int(progress_ratio * 40)  # 15% - 55%
                     task_manager.update_task(
                         task_id,
                         message=msg,
-                        progress=progress
+                        progress=round(19 + min(1.0, progress_ratio) * 67, 1),
                     )
-
-                task_manager.update_task(
-                    task_id,
-                    message=f"Starting to add {total_chunks} text chunks...",
-                    progress=15
-                )
 
                 episode_uuids = builder.add_text_batches(
                     graph_id,
                     chunks,
                     batch_size=3,
-                    progress_callback=add_progress_callback
+                    progress_callback=add_progress_callback,
+                    phase_hook=phase_hook,
                 )
 
-                # Wait for Zep processing to complete (query processed status for each episode)
                 task_manager.update_task(
                     task_id,
-                    message="Waiting for Zep to process data...",
-                    progress=55
+                    message="Finalizing graph extraction...",
+                    progress=86,
                 )
 
                 def wait_progress_callback(msg, progress_ratio):
-                    progress = 55 + int(progress_ratio * 35)  # 55% - 90%
                     task_manager.update_task(
                         task_id,
                         message=msg,
-                        progress=progress
+                        progress=round(86 + min(1.0, progress_ratio) * 9, 1),
                     )
 
                 builder._wait_for_episodes(episode_uuids, wait_progress_callback)
 
-                # Get graph data
                 task_manager.update_task(
                     task_id,
                     message="Fetching graph data...",
-                    progress=95
+                    progress=96,
                 )
                 graph_data = builder.get_graph_data(graph_id)
 

@@ -330,11 +330,11 @@
               <div class="detail-section" v-if="buildProgress && currentPhase >= 1">
                 <div class="detail-label">Build Progress</div>
                 <div class="progress-bar">
-                  <div class="progress-fill" :style="{ width: buildProgress.progress + '%' }"></div>
+                  <div class="progress-fill" :style="{ width: Math.min(100, Number(buildProgress.progress || 0)) + '%' }"></div>
                 </div>
                 <div class="progress-info">
                   <span class="progress-message">{{ buildProgress.message }}</span>
-                  <span class="progress-percent">{{ buildProgress.progress }}%</span>
+                  <span class="progress-percent">{{ formatGraphBuildProgress(buildProgress.progress) }}%</span>
                 </div>
               </div>
               
@@ -515,6 +515,12 @@ const formatDate = (dateStr) => {
   }
 }
 
+const formatGraphBuildProgress = (value) => {
+  const n = Number(value)
+  if (Number.isNaN(n)) return '0.0'
+  return n.toFixed(1)
+}
+
 // Select node
 const selectNode = (nodeData, color) => {
   selectedItem.value = {
@@ -543,7 +549,7 @@ const getPhaseStatusText = (phase) => {
   if (currentPhase.value > phase) return 'Completed'
   if (currentPhase.value === phase) {
     if (phase === 1 && buildProgress.value) {
-      return `${buildProgress.value.progress}%`
+      return `${formatGraphBuildProgress(buildProgress.value.progress)}%`
     }
     return 'In Progress'
   }
@@ -790,7 +796,7 @@ const pollTaskStatus = async (taskId) => {
 
       // Update progress display
       buildProgress.value = {
-        progress: task.progress || 0,
+        progress: Number(task.progress ?? 0),
         message: task.message || 'Processing...'
       }
 
