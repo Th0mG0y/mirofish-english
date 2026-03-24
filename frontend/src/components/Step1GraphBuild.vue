@@ -122,7 +122,7 @@
         <div class="card-content">
           <p class="api-note">POST /api/graph/build</p>
           <p class="description">
-            Based on the generated ontology, documents are automatically chunked and passed to Zep to build a knowledge graph, extracting entities and relationships while forming temporal memory and community summaries
+            Based on the generated ontology, documents are automatically chunked and passed to the graph engine to build a knowledge graph, extracting entities and relationships while forming temporal memory and community summaries
           </p>
           
           <!-- Stats Cards -->
