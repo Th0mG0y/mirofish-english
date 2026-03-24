@@ -10,8 +10,9 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Type
 
+from pydantic import BaseModel, Field
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
 
@@ -155,11 +156,12 @@ class GraphBuilderService:
                 message="Indexes ready"
             )
 
-            self.set_ontology(graph_id, ontology)
+            entity_types = self._ontology_to_entity_types(ontology)
+            type_names = list(entity_types.keys()) if entity_types else []
             self.task_manager.update_task(
                 task_id,
                 progress=14,
-                message="Ontology set"
+                message=f"Ontology loaded: {len(type_names)} entity types"
             )
 
             def on_split_frac(frac: float) -> None:
@@ -192,6 +194,7 @@ class GraphBuilderService:
                     progress=round(20 + min(1.0, prog) * 66, 1),
                     message=msg,
                 ),
+                entity_types=entity_types,
             )
 
             self.task_manager.update_task(
@@ -260,8 +263,43 @@ class GraphBuilderService:
     def create_graph(self, name: str) -> str:
         return f"mirofish_{uuid.uuid4().hex[:16]}"
 
-    def set_ontology(self, graph_id: str, ontology: Dict[str, Any]):
-        return None
+    @staticmethod
+    def _ontology_to_entity_types(ontology: Dict[str, Any]) -> Optional[Dict[str, Type[BaseModel]]]:
+        """Convert a MiroFish ontology dict into Graphiti's entity_types format.
+
+        Graphiti expects ``dict[str, type[BaseModel]]`` where each key is a
+        PascalCase type name and the value is a Pydantic model whose docstring
+        describes the type (used by the LLM to classify extracted entities).
+        """
+        entity_defs = ontology.get("entity_types")
+        if not entity_defs:
+            return None
+
+        entity_types: Dict[str, Type[BaseModel]] = {}
+        for entity_def in entity_defs:
+            name = entity_def.get("name")
+            if not name:
+                continue
+            description = entity_def.get("description", f"A {name} entity.")
+
+            # Build optional attribute fields from the ontology
+            field_definitions: Dict[str, Any] = {}
+            for attr in entity_def.get("attributes", []):
+                attr_name = attr.get("name")
+                if attr_name:
+                    field_definitions[attr_name] = (
+                        Optional[str],
+                        Field(default=None, description=attr.get("description", attr_name)),
+                    )
+
+            # Dynamically create a Pydantic model class with the description as docstring
+            model = type(name, (BaseModel,), {"__doc__": description, "__annotations__": {
+                k: v[0] for k, v in field_definitions.items()
+            }, **{k: v[1] for k, v in field_definitions.items()}})
+
+            entity_types[name] = model
+
+        return entity_types if entity_types else None
 
     async def _add_text_batches_async(
         self,
@@ -270,6 +308,7 @@ class GraphBuilderService:
         chunks: List[str],
         batch_size: int = 3,
         progress_callback: Optional[Callable[[str, float], None]] = None,
+        entity_types: Optional[Dict[str, Type[BaseModel]]] = None,
     ) -> List[str]:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -296,6 +335,7 @@ class GraphBuilderService:
                     source=EpisodeType.text,
                     reference_time=datetime.utcnow(),
                     group_id=graph_id,
+                    entity_types=entity_types,
                 )
                 if result and result.episode and result.episode.uuid:
                     episode_uuids.append(str(result.episode.uuid))
@@ -323,6 +363,7 @@ class GraphBuilderService:
         batch_size: int = 3,
         progress_callback: Optional[Callable[[str, float], None]] = None,
         phase_hook: Optional[Callable[[str], None]] = None,
+        entity_types: Optional[Dict[str, Type[BaseModel]]] = None,
     ) -> List[str]:
         async def _impl() -> List[str]:
             graphiti = self._create_graphiti()
@@ -338,6 +379,7 @@ class GraphBuilderService:
                     chunks,
                     batch_size,
                     progress_callback,
+                    entity_types=entity_types,
                 )
             finally:
                 await graphiti.close()

@@ -444,7 +444,7 @@ def build_graph():
                     message="Applying ontology definition...",
                     progress=16,
                 )
-                builder.set_ontology(graph_id, ontology)
+                entity_types = builder._ontology_to_entity_types(ontology)
 
                 def phase_hook(phase: str) -> None:
                     if phase == "indices_start":
@@ -473,6 +473,7 @@ def build_graph():
                     batch_size=3,
                     progress_callback=add_progress_callback,
                     phase_hook=phase_hook,
+                    entity_types=entity_types,
                 )
 
                 task_manager.update_task(
