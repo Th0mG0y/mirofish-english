@@ -363,6 +363,7 @@ class GraphBuilderService:
         batch_size: int = 3,
         progress_callback: Optional[Callable[[str, float], None]] = None,
         phase_hook: Optional[Callable[[str], None]] = None,
+        entity_types: Optional[Dict[str, Type[BaseModel]]] = None,
     ) -> List[str]:
         async def _impl() -> List[str]:
             graphiti = self._create_graphiti()
@@ -378,6 +379,7 @@ class GraphBuilderService:
                     chunks,
                     batch_size,
                     progress_callback,
+                    entity_types=entity_types,
                 )
             finally:
                 await graphiti.close()
