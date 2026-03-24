@@ -142,7 +142,7 @@ npm run setup:all
 
 # 3. Install the extra packages required by this Graphiti build
 cd backend
-uv run python -m pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
+uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
 cd ..
 
 # 4. Start both frontend and backend

@@ -369,7 +369,7 @@ Run this from the `backend` folder:
 
 ```powershell
 cd backend
-uv run python -m pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
+uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
 ```
 
 If PowerShell says some of them are already installed, that is fine.
@@ -482,7 +482,7 @@ Fix:
 5. Fill in your OpenAI key
 6. Run `npm run setup:all`
 7. Run `cd backend`
-8. Run `uv run python -m pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
+8. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
 9. Run `cd ..`
 10. Run `npm run dev`
 
@@ -496,7 +496,7 @@ Fix:
 6. Fill in your Anthropic key and OpenAI key
 7. Run `npm run setup:all`
 8. Run `cd backend`
-9. Run `uv run python -m pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
+9. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
 10. Run `cd ..` and `npm run dev`
 
 ### All local via LM Studio
@@ -509,7 +509,7 @@ Fix:
 6. Replace the model names with the exact names shown by LM Studio
 7. Run `npm run setup:all`
 8. Run `cd backend`
-9. Run `uv run python -m pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
+9. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
 10. Run `cd ..` and `npm run dev`
 
 ### All local via Ollama
@@ -522,7 +522,7 @@ Fix:
 6. Replace the model names if needed
 7. Run `npm run setup:all`
 8. Run `cd backend`
-9. Run `uv run python -m pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
+9. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
 10. Run `cd ..` and `npm run dev`
 
 ## Final Reminder
