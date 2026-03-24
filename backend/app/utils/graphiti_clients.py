@@ -8,7 +8,6 @@ from graphiti_core.cross_encoder.client import CrossEncoderClient
 from graphiti_core.embedder.client import EmbedderClient
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.helpers import semaphore_gather
-from graphiti_core.llm_client.anthropic_client import AnthropicClient as GraphitiAnthropicClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient as GraphitiOpenAIClient
 from openai import AsyncOpenAI
@@ -183,6 +182,7 @@ class CompatibleOpenAIRerankerClient(CrossEncoderClient):
 
 def create_graphiti_llm_client():
     if Config.GRAPHITI_LLM_PROVIDER == 'anthropic':
+        from graphiti_core.llm_client.anthropic_client import AnthropicClient as GraphitiAnthropicClient
         return GraphitiAnthropicClient(
             config=LLMConfig(
                 api_key=Config.get_graphiti_llm_api_key(),
