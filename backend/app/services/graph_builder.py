@@ -143,16 +143,38 @@ class GraphBuilderService:
             )
 
             graphiti = self._create_graphiti()
+            self.task_manager.update_task(
+                task_id,
+                progress=11,
+                message="Creating graph database indexes (first run can be slow)..."
+            )
             await graphiti.build_indices_and_constraints()
+            self.task_manager.update_task(
+                task_id,
+                progress=13,
+                message="Indexes ready"
+            )
 
             self.set_ontology(graph_id, ontology)
             self.task_manager.update_task(
                 task_id,
-                progress=15,
+                progress=14,
                 message="Ontology set"
             )
 
-            chunks = TextProcessor.split_text(text, chunk_size, chunk_overlap)
+            def on_split_frac(frac: float) -> None:
+                self.task_manager.update_task(
+                    task_id,
+                    progress=round(14 + min(1.0, frac) * 6, 1),
+                    message=f"Splitting document… {min(100, int(frac * 100))}%",
+                )
+
+            chunks = TextProcessor.split_text(
+                text,
+                chunk_size,
+                chunk_overlap,
+                on_progress=on_split_frac,
+            )
             total_chunks = len(chunks)
             self.task_manager.update_task(
                 task_id,
@@ -167,14 +189,14 @@ class GraphBuilderService:
                 batch_size,
                 lambda msg, prog: self.task_manager.update_task(
                     task_id,
-                    progress=20 + int(prog * 0.4),
-                    message=msg
-                )
+                    progress=round(20 + min(1.0, prog) * 66, 1),
+                    message=msg,
+                ),
             )
 
             self.task_manager.update_task(
                 task_id,
-                progress=60,
+                progress=86,
                 message="Waiting for processing to complete..."
             )
 
@@ -182,14 +204,14 @@ class GraphBuilderService:
                 episode_uuids,
                 lambda msg, prog: self.task_manager.update_task(
                     task_id,
-                    progress=60 + int(prog * 0.3),
-                    message=msg
-                )
+                    progress=round(86 + min(1.0, prog) * 9, 1),
+                    message=msg,
+                ),
             )
 
             self.task_manager.update_task(
                 task_id,
-                progress=90,
+                progress=96,
                 message="Fetching graph information..."
             )
 
@@ -247,7 +269,7 @@ class GraphBuilderService:
         graph_id: str,
         chunks: List[str],
         batch_size: int = 3,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable[[str, float], None]] = None,
     ) -> List[str]:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -260,17 +282,11 @@ class GraphBuilderService:
         episode_uuids: List[str] = []
         total_chunks = len(chunks)
         total_batches = (total_chunks + batch_size - 1) // batch_size
+        emit_stride = max(1, total_chunks // 120)
 
         for i in range(0, total_chunks, batch_size):
             batch_chunks = chunks[i:i + batch_size]
             batch_num = i // batch_size + 1
-
-            if progress_callback:
-                progress = (i + len(batch_chunks)) / total_chunks
-                progress_callback(
-                    f"Sending batch {batch_num}/{total_batches}",
-                    progress
-                )
 
             for offset, chunk in enumerate(batch_chunks, start=1):
                 result = await graphiti.add_episode(
@@ -284,6 +300,20 @@ class GraphBuilderService:
                 if result and result.episode and result.episode.uuid:
                     episode_uuids.append(str(result.episode.uuid))
 
+                if progress_callback:
+                    done = i + offset
+                    ratio = done / total_chunks
+                    if (
+                        done == 1
+                        or done == total_chunks
+                        or total_chunks <= 60
+                        or done % emit_stride == 0
+                    ):
+                        progress_callback(
+                            f"Chunk {done}/{total_chunks} (batch {batch_num}/{total_batches})",
+                            ratio,
+                        )
+
         return episode_uuids
 
     def add_text_batches(
@@ -291,12 +321,17 @@ class GraphBuilderService:
         graph_id: str,
         chunks: List[str],
         batch_size: int = 3,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable[[str, float], None]] = None,
+        phase_hook: Optional[Callable[[str], None]] = None,
     ) -> List[str]:
         async def _impl() -> List[str]:
             graphiti = self._create_graphiti()
             try:
+                if phase_hook:
+                    phase_hook("indices_start")
                 await graphiti.build_indices_and_constraints()
+                if phase_hook:
+                    phase_hook("indices_end")
                 return await self._add_text_batches_async(
                     graphiti,
                     graph_id,

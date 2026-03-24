@@ -114,7 +114,7 @@
           </div>
           <div class="step-status">
             <span v-if="currentPhase > 1" class="badge success">Completed</span>
-            <span v-else-if="currentPhase === 1" class="badge processing">{{ buildProgress?.progress || 0 }}%</span>
+            <span v-else-if="currentPhase === 1" class="badge processing">{{ formatGraphProgress(buildProgress?.progress) }}%</span>
             <span v-else class="badge pending">Waiting</span>
           </div>
         </div>
@@ -276,6 +276,12 @@ watch(() => props.systemLogs.length, () => {
     }
   })
 })
+
+const formatGraphProgress = (value) => {
+  const n = Number(value)
+  if (Number.isNaN(n)) return '0.0'
+  return n.toFixed(1)
+}
 
 const getLogClass = (msg) => {
   const lower = msg.toLowerCase()

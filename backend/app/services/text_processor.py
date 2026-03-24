@@ -2,7 +2,7 @@
 Text processing service
 """
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 from ..utils.file_parser import FileParser, split_text_into_chunks
 
 
@@ -18,7 +18,8 @@ class TextProcessor:
     def split_text(
         text: str,
         chunk_size: int = 500,
-        overlap: int = 50
+        overlap: int = 50,
+        on_progress: Optional[Callable[[float], None]] = None,
     ) -> List[str]:
         """
         Split text into chunks
@@ -27,11 +28,12 @@ class TextProcessor:
             text: Original text
             chunk_size: Chunk size
             overlap: Overlap size
+            on_progress: Optional callback with fraction in [0, 1] while splitting
 
         Returns:
             List of text chunks
         """
-        return split_text_into_chunks(text, chunk_size, overlap)
+        return split_text_into_chunks(text, chunk_size, overlap, on_progress=on_progress)
 
     @staticmethod
     def preprocess_text(text: str) -> str:

@@ -5,7 +5,7 @@ Supports text extraction from PDF, Markdown, and TXT files
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 
 def _read_text_with_fallback(file_path: str) -> str:
@@ -147,7 +147,8 @@ class FileParser:
 def split_text_into_chunks(
     text: str,
     chunk_size: int = 500,
-    overlap: int = 50
+    overlap: int = 50,
+    on_progress: Optional[Callable[[float], None]] = None,
 ) -> List[str]:
     """
     Split text into smaller chunks
@@ -156,22 +157,40 @@ def split_text_into_chunks(
         text: Original text
         chunk_size: Number of characters per chunk
         overlap: Number of overlapping characters between chunks
+        on_progress: Optional callback with fraction in [0, 1] while scanning text
 
     Returns:
         List of text chunks
     """
-    if len(text) <= chunk_size:
+    total = len(text)
+    if total == 0:
+        if on_progress:
+            on_progress(1.0)
+        return []
+
+    if total <= chunk_size:
+        if on_progress:
+            on_progress(1.0)
         return [text] if text.strip() else []
 
     chunks = []
     start = 0
+    last_bucket = -1
 
-    while start < len(text):
+    def _emit_progress() -> None:
+        nonlocal last_bucket
+        if not on_progress:
+            return
+        bucket = min(199, int((start / total) * 200))
+        if bucket > last_bucket:
+            last_bucket = bucket
+            on_progress(min(1.0, start / total))
+
+    while start < total:
+        _emit_progress()
         end = start + chunk_size
 
-        # Try to split at a sentence boundary
-        if end < len(text):
-            # Find the nearest sentence terminator
+        if end < total:
             for sep in ['。', '！', '？', '.\n', '!\n', '?\n', '\n\n', '. ', '! ', '? ']:
                 last_sep = text[start:end].rfind(sep)
                 if last_sep != -1 and last_sep > chunk_size * 0.3:
@@ -182,7 +201,9 @@ def split_text_into_chunks(
         if chunk:
             chunks.append(chunk)
 
-        # Next chunk starts from the overlap position
-        start = end - overlap if end < len(text) else len(text)
+        start = end - overlap if end < total else total
+
+    if on_progress:
+        on_progress(1.0)
 
     return chunks

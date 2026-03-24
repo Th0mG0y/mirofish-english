@@ -7,7 +7,7 @@ import uuid
 import threading
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional, Union
 from dataclasses import dataclass, field
 
 
@@ -27,7 +27,7 @@ class Task:
     status: TaskStatus
     created_at: datetime
     updated_at: datetime
-    progress: int = 0              # Overall progress percentage 0-100
+    progress: float = 0.0
     message: str = ""              # Status message
     result: Optional[Dict] = None  # Task result
     error: Optional[str] = None    # Error information
@@ -42,7 +42,7 @@ class Task:
             "status": self.status.value,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
-            "progress": self.progress,
+            "progress": round(self.progress, 1),
             "message": self.message,
             "progress_detail": self.progress_detail,
             "result": self.result,
@@ -107,7 +107,7 @@ class TaskManager:
         self,
         task_id: str,
         status: Optional[TaskStatus] = None,
-        progress: Optional[int] = None,
+        progress: Optional[Union[int, float]] = None,
         message: Optional[str] = None,
         result: Optional[Dict] = None,
         error: Optional[str] = None,
@@ -132,7 +132,7 @@ class TaskManager:
                 if status is not None:
                     task.status = status
                 if progress is not None:
-                    task.progress = progress
+                    task.progress = float(progress)
                 if message is not None:
                     task.message = message
                 if result is not None:
