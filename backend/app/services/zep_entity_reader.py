@@ -176,16 +176,21 @@ class ZepEntityReader:
         for node in all_nodes:
             labels = node.get("labels", [])
             custom_labels = [label for label in labels if label not in _GENERIC_LABELS]
-            if not custom_labels:
-                continue
 
-            if defined_entity_types:
-                matching_labels = [label for label in custom_labels if label in defined_entity_types]
-                if not matching_labels:
-                    continue
-                entity_type = matching_labels[0]
+            if custom_labels:
+                if defined_entity_types:
+                    matching_labels = [label for label in custom_labels if label in defined_entity_types]
+                    if not matching_labels:
+                        continue
+                    entity_type = matching_labels[0]
+                else:
+                    entity_type = custom_labels[0]
             else:
-                entity_type = custom_labels[0]
+                # Graphiti nodes may only have the generic "Entity" label;
+                # treat them as valid entities with type "Entity"
+                if defined_entity_types and "Entity" not in defined_entity_types:
+                    continue
+                entity_type = "Entity"
 
             entity_types_found.add(entity_type)
             entity = EntityNode(
