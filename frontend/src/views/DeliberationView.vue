@@ -7,70 +7,204 @@
       </div>
 
       <div class="header-center">
-        <div class="view-title">Adversarial Deliberation</div>
+        <div class="view-switcher">
+          <button
+            v-for="mode in ['graph', 'split', 'workbench']"
+            :key="mode"
+            class="switch-btn"
+            :class="{ active: viewMode === mode }"
+            @click="viewMode = mode"
+          >
+            {{ { graph: 'Graph', split: 'Split', workbench: 'Workbench' }[mode] }}
+          </button>
+        </div>
       </div>
 
       <div class="header-right">
         <div class="workflow-step">
-          <span class="step-num">Council Debate</span>
-          <span class="step-name">{{ statusText }}</span>
+          <span class="step-num">Step 4/5</span>
+          <span class="step-name">Adversarial Debate</span>
         </div>
+        <div class="step-divider"></div>
+        <span class="status-indicator" :class="statusClass">
+          <span class="dot"></span>
+          {{ statusText }}
+        </span>
       </div>
     </header>
 
     <!-- Main Content Area -->
     <main class="content-area">
-      <Step4Deliberation
-        :sessionId="sessionId"
-        :simulationId="simulationId"
-      />
+      <!-- Left Panel: Graph -->
+      <div class="panel-wrapper left" :style="leftPanelStyle">
+        <GraphPanel
+          :graphData="graphData"
+          :loading="graphLoading"
+          :currentPhase="4"
+          :isSimulating="false"
+          @refresh="refreshGraph"
+          @toggle-maximize="toggleMaximize('graph')"
+        />
+      </div>
+
+      <!-- Right Panel: Step 4 - Deliberation -->
+      <div class="panel-wrapper right" :style="rightPanelStyle">
+        <Step4Deliberation
+          :sessionId="currentSessionId"
+          :simulationId="simulationId"
+          @update-status="updateStatus"
+        />
+      </div>
     </main>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import GraphPanel from '../components/GraphPanel.vue'
 import Step4Deliberation from '../components/Step4Deliberation.vue'
+import { getProject, getGraphData } from '../api/graph'
+import { getSimulation } from '../api/simulation'
+import { getSession } from '../api/deliberation'
 
-const router = useRouter()
 const route = useRoute()
+const router = useRouter()
 
 const props = defineProps({
-  sessionId: {
-    type: String,
-    required: true
-  }
+  sessionId: String
 })
 
-const simulationId = ref('')
-const status = ref('loading')
+// Layout State - default to workbench view
+const viewMode = ref('workbench')
+
+// Data State
+const currentSessionId = ref(route.params.sessionId)
+const simulationId = ref(null)
+const projectData = ref(null)
+const graphData = ref(null)
+const graphLoading = ref(false)
+const currentStatus = ref('loading') // loading | idle | debating | voting | synthesizing | completed | error
+
+// --- Computed Layout Styles ---
+const leftPanelStyle = computed(() => {
+  if (viewMode.value === 'graph') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
+  if (viewMode.value === 'workbench') return { width: '0%', opacity: 0, transform: 'translateX(-20px)' }
+  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+})
+
+const rightPanelStyle = computed(() => {
+  if (viewMode.value === 'workbench') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
+  if (viewMode.value === 'graph') return { width: '0%', opacity: 0, transform: 'translateX(20px)' }
+  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+})
+
+// --- Status Computed ---
+const statusClass = computed(() => {
+  const map = {
+    loading: 'processing',
+    idle: 'idle',
+    debating: 'processing',
+    voting: 'processing',
+    synthesizing: 'processing',
+    completed: 'completed',
+    error: 'error'
+  }
+  return map[currentStatus.value] || 'idle'
+})
 
 const statusText = computed(() => {
   const map = {
     loading: 'Loading...',
-    created: 'Session Created',
-    debating: 'Debate in Progress',
-    voting: 'Voting in Progress',
-    synthesizing: 'Synthesizing...',
+    idle: 'Ready',
+    debating: 'Debating',
+    voting: 'Voting',
+    synthesizing: 'Synthesizing',
     completed: 'Completed',
-    failed: 'Failed'
+    error: 'Error'
   }
-  return map[status.value] || status.value
+  return map[currentStatus.value] || currentStatus.value
 })
 
-onMounted(async () => {
-  try {
-    const { getSession } = await import('../api/deliberation.js')
-    const res = await getSession(props.sessionId)
-    if (res.data) {
-      simulationId.value = res.data.simulation_id
-      status.value = res.data.status
-    }
-  } catch (e) {
-    console.error('Failed to load deliberation session:', e)
-    status.value = 'failed'
+// --- Helpers ---
+const updateStatus = (status) => {
+  currentStatus.value = status
+}
+
+// --- Layout Methods ---
+const toggleMaximize = (target) => {
+  if (viewMode.value === target) {
+    viewMode.value = 'split'
+  } else {
+    viewMode.value = target
   }
+}
+
+// --- Data Logic ---
+const loadSessionData = async () => {
+  try {
+    // Get session to obtain simulation_id
+    const sessionRes = await getSession(currentSessionId.value)
+    if (sessionRes.data) {
+      const sessionData = sessionRes.data
+      simulationId.value = sessionData.simulation_id
+
+      if (simulationId.value) {
+        // Get simulation info
+        const simRes = await getSimulation(simulationId.value)
+        if (simRes.success && simRes.data) {
+          const simData = simRes.data
+
+          // Get project info
+          if (simData.project_id) {
+            const projRes = await getProject(simData.project_id)
+            if (projRes.success && projRes.data) {
+              projectData.value = projRes.data
+
+              // Get graph data
+              if (projRes.data.graph_id) {
+                await loadGraph(projRes.data.graph_id)
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load deliberation session data:', err)
+  }
+}
+
+const loadGraph = async (graphId) => {
+  graphLoading.value = true
+  try {
+    const res = await getGraphData(graphId)
+    if (res.success) {
+      graphData.value = res.data
+    }
+  } catch (err) {
+    console.error('Failed to load graph:', err)
+  } finally {
+    graphLoading.value = false
+  }
+}
+
+const refreshGraph = () => {
+  if (projectData.value?.graph_id) {
+    loadGraph(projectData.value.graph_id)
+  }
+}
+
+// Watch route params
+watch(() => route.params.sessionId, (newId) => {
+  if (newId && newId !== currentSessionId.value) {
+    currentSessionId.value = newId
+    loadSessionData()
+  }
+}, { immediate: true })
+
+onMounted(() => {
+  loadSessionData()
 })
 </script>
 
@@ -79,53 +213,133 @@ onMounted(async () => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #0a0a0a;
-  color: #e0e0e0;
+  background: #FFF;
+  overflow: hidden;
+  font-family: 'Space Grotesk', 'Noto Sans SC', system-ui, sans-serif;
 }
 
+/* Header */
 .app-header {
+  height: 60px;
+  border-bottom: 1px solid #EAEAEA;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
-  height: 48px;
-  border-bottom: 1px solid #1a1a1a;
-  background: #0d0d0d;
+  padding: 0 24px;
+  background: #FFF;
+  z-index: 100;
+  position: relative;
 }
 
-.header-left .brand {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  color: #00ff88;
+.header-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: 1px;
   cursor: pointer;
 }
 
-.header-center .view-title {
-  font-size: 13px;
-  color: #888;
-  letter-spacing: 1px;
+.view-switcher {
+  display: flex;
+  background: #F5F5F5;
+  padding: 4px;
+  border-radius: 6px;
+  gap: 4px;
 }
 
-.header-right .workflow-step {
+.switch-btn {
+  border: none;
+  background: transparent;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.switch-btn.active {
+  background: #FFF;
+  color: #000;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.workflow-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.step-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: #999;
+}
+
+.step-name {
+  font-weight: 700;
+  color: #000;
+}
+
+.step-divider {
+  width: 1px;
+  height: 14px;
+  background-color: #E0E0E0;
+}
+
+.status-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
-}
-
-.step-num {
-  color: #00ff88;
-  font-weight: 600;
-}
-
-.step-name {
   color: #666;
+  font-weight: 500;
 }
 
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #CCC;
+}
+
+.status-indicator.processing .dot { background: #FF9800; animation: pulse 1s infinite; }
+.status-indicator.completed .dot { background: #4CAF50; }
+.status-indicator.error .dot { background: #F44336; }
+.status-indicator.idle .dot { background: #CCC; }
+
+@keyframes pulse { 50% { opacity: 0.5; } }
+
+/* Content */
 .content-area {
   flex: 1;
-  overflow: auto;
-  padding: 20px;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+
+.panel-wrapper {
+  height: 100%;
+  overflow: hidden;
+  transition: width 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.3s ease, transform 0.3s ease;
+  will-change: width, opacity, transform;
+}
+
+.panel-wrapper.left {
+  border-right: 1px solid #EAEAEA;
 }
 </style>
