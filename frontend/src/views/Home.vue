@@ -4,7 +4,7 @@
     <nav class="navbar">
       <div class="nav-brand">MIROFISH</div>
       <div class="nav-links">
-        <a href="https://github.com/666ghj/MiroFish" target="_blank" class="github-link">
+        <a href="https://github.com/Th0mG0y/mirofish-english" target="_blank" class="github-link">
           Visit our GitHub page <span class="arrow">↗</span>
         </a>
       </div>
@@ -101,14 +101,23 @@
                 </div>
               </div>
               <div class="workflow-item">
-                <span class="step-num">04</span>
+              <span class="step-num">04</span>
+              <div class="step-info">
+                <div class="step-title">Debate Simulation</div>
+                <div class="step-desc">
+                  The system simulates structured debates between agents, enabling dynamic argument generation, counterarguments, and outcome evaluation.
+                </div>
+              </div>
+            </div>
+              <div class="workflow-item">
+                <span class="step-num">05</span>
                 <div class="step-info">
                   <div class="step-title">Report Generation</div>
                   <div class="step-desc">ReportAgent has a rich toolset to deeply interact with the post-simulation environment</div>
                 </div>
               </div>
               <div class="workflow-item">
-                <span class="step-num">05</span>
+                <span class="step-num">06</span>
                 <div class="step-info">
                   <div class="step-title">Deep Interaction</div>
                   <div class="step-desc">Chat with any agent in the simulated world & chat with ReportAgent</div>

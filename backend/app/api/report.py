@@ -60,6 +60,17 @@ def generate_report():
         include_quality_assessment = data.get('include_quality_assessment', True)
         deliberation_session_id = data.get('deliberation_session_id')
 
+        # Auto-detect deliberation session if not provided
+        if not deliberation_session_id:
+            try:
+                from ..models.deliberation_manager import DeliberationManager
+                delib_session = DeliberationManager.get_by_simulation(simulation_id)
+                if delib_session:
+                    deliberation_session_id = delib_session.session_id
+                    logger.info(f"Auto-detected deliberation session: {deliberation_session_id}")
+            except Exception as e:
+                logger.debug(f"No deliberation session found for {simulation_id}: {e}")
+
         # Get simulation information
         manager = SimulationManager()
         state = manager.get_simulation(simulation_id)

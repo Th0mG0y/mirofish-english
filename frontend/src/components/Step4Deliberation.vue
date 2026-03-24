@@ -1,15 +1,21 @@
 <template>
   <div class="deliberation-panel">
-    <!-- Status Bar -->
-    <div class="status-bar">
-      <div class="status-info">
+    <!-- Control Bar (pinned top, matches Step3Simulation) -->
+    <div class="control-bar">
+      <div class="status-group">
         <span class="status-dot" :class="currentPhase"></span>
         <span class="status-text">{{ statusLabel }}</span>
       </div>
-      <div class="action-buttons">
+      <div class="control-actions">
+        <button class="control-btn back" @click="backToSimulation">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+          Back to Simulation
+        </button>
         <button
           v-if="canRunDebate"
-          class="action-btn debate"
+          class="control-btn debate"
           :disabled="running"
           @click="startDebate"
         >
@@ -17,7 +23,7 @@
         </button>
         <button
           v-if="canVote"
-          class="action-btn vote"
+          class="control-btn vote"
           :disabled="running"
           @click="startVoting"
         >
@@ -25,11 +31,19 @@
         </button>
         <button
           v-if="canSynthesize"
-          class="action-btn synthesize"
+          class="control-btn synthesize"
           :disabled="running"
           @click="startSynthesis"
         >
           {{ running && currentPhase === 'synthesizing' ? 'Synthesizing...' : 'Synthesize' }}
+        </button>
+        <button
+          v-if="isComplete"
+          class="control-btn primary"
+          :disabled="generatingReport || running"
+          @click="handleGenerateReport"
+        >
+          {{ generatingReport ? 'Creating Report...' : 'Generate Report' }}
         </button>
       </div>
     </div>
@@ -40,112 +54,7 @@
       <span class="progress-text">{{ phaseProgressText }}</span>
     </div>
 
-    <!-- Council Panels -->
-    <div v-if="session?.rounds?.length" class="debate-area">
-      <div class="councils-container">
-        <!-- Optimist Council -->
-        <div class="council-panel optimist">
-          <h3 class="council-title optimist-title">Optimist Council</h3>
-          <div class="members">
-            <div v-for="m in session.optimist_council" :key="m.member_id" class="member-chip">
-              {{ m.name }} <span class="member-tier">{{ m.tier }}</span>
-            </div>
-          </div>
-          <div v-for="round in session.rounds" :key="'opt-' + round.round_number" class="round-section">
-            <div class="round-label">Round {{ round.round_number }}</div>
-            <div
-              v-for="arg in round.arguments.filter(a => a.position === 'optimist')"
-              :key="arg.member_id + '-' + arg.round_number"
-              class="argument-card optimist-card"
-            >
-              <div class="arg-header">
-                <span class="arg-member">{{ arg.member_id }}</span>
-                <span class="arg-confidence">{{ (arg.confidence * 100).toFixed(0) }}%</span>
-              </div>
-              <div class="arg-content">{{ arg.content }}</div>
-              <div v-if="arg.evidence?.length" class="arg-evidence">
-                <div v-for="(ev, i) in arg.evidence" :key="i" class="evidence-item">{{ ev }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Pessimist Council -->
-        <div class="council-panel pessimist">
-          <h3 class="council-title pessimist-title">Pessimist Council</h3>
-          <div class="members">
-            <div v-for="m in session.pessimist_council" :key="m.member_id" class="member-chip">
-              {{ m.name }} <span class="member-tier">{{ m.tier }}</span>
-            </div>
-          </div>
-          <div v-for="round in session.rounds" :key="'pes-' + round.round_number" class="round-section">
-            <div class="round-label">Round {{ round.round_number }}</div>
-            <div
-              v-for="arg in round.arguments.filter(a => a.position === 'pessimist')"
-              :key="arg.member_id + '-' + arg.round_number"
-              class="argument-card pessimist-card"
-            >
-              <div class="arg-header">
-                <span class="arg-member">{{ arg.member_id }}</span>
-                <span class="arg-confidence">{{ (arg.confidence * 100).toFixed(0) }}%</span>
-              </div>
-              <div class="arg-content">{{ arg.content }}</div>
-              <div v-if="arg.evidence?.length" class="arg-evidence">
-                <div v-for="(ev, i) in arg.evidence" :key="i" class="evidence-item">{{ ev }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Voting Results -->
-    <div v-if="session?.vote_results?.dimensions" class="voting-section">
-      <h3 class="section-title">Voting Results</h3>
-      <div class="vote-dimensions">
-        <div v-for="(dimData, dimName) in session.vote_results.dimensions" :key="dimName" class="dimension-card">
-          <div class="dim-name">{{ dimName }}</div>
-          <div class="vote-bar-container">
-            <div class="vote-label-a">{{ dimData.position_a_label }}</div>
-            <div class="vote-bar">
-              <div
-                class="bar-fill position-a"
-                :style="{ width: dimData.raw_percentage.position_a + '%' }"
-              >
-                {{ dimData.raw_percentage.position_a }}%
-              </div>
-              <div
-                class="bar-fill position-b"
-                :style="{ width: dimData.raw_percentage.position_b + '%' }"
-              >
-                {{ dimData.raw_percentage.position_b }}%
-              </div>
-              <div
-                v-if="dimData.raw_percentage.neither > 0"
-                class="bar-fill neither"
-                :style="{ width: dimData.raw_percentage.neither + '%' }"
-              >
-                {{ dimData.raw_percentage.neither }}%
-              </div>
-            </div>
-            <div class="vote-label-b">{{ dimData.position_b_label }}</div>
-          </div>
-          <div class="vote-meta">
-            <span>Total votes: {{ dimData.total_votes }}</span>
-            <span v-if="session.vote_results.contested_dimensions?.includes(dimName)" class="contested-badge">CONTESTED</span>
-            <span v-if="session.vote_results.neither_triggered?.includes(dimName)" class="neither-badge">NEITHER &gt;20%</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Synthesis -->
-    <div v-if="session?.synthesis" class="synthesis-section">
-      <h3 class="section-title">Synthesis</h3>
-      <div class="synthesis-content" v-html="renderMarkdown(session.synthesis)"></div>
-    </div>
-
-    <!-- Error State -->
+    <!-- Error Banner -->
     <div v-if="errorMessage" class="error-banner">
       <div class="error-content">
         <span class="error-icon">!</span>
@@ -154,28 +63,123 @@
       <p class="error-hint">You can go back to the simulation and generate the report from there, or retry the debate.</p>
     </div>
 
-    <!-- Navigation Buttons (always visible when session loaded) -->
-    <div v-if="session && !loading" class="navigation-section">
-      <button class="nav-btn secondary" @click="backToSimulation" :disabled="running">
-        Back to Simulation
-      </button>
-      <button v-if="isComplete" class="nav-btn primary" :disabled="generatingReport" @click="handleGenerateReport">
-        {{ generatingReport ? 'Creating Report...' : 'Generate Report' }}
-      </button>
-    </div>
+    <!-- Scrollable Main Content -->
+    <div class="main-content-area">
+      <!-- Council Panels -->
+      <div v-if="session?.rounds?.length" class="debate-area">
+        <div class="councils-container">
+          <!-- Optimist Council -->
+          <div class="council-panel optimist">
+            <h3 class="council-title optimist-title">Optimist Council</h3>
+            <div class="members">
+              <div v-for="m in session.optimist_council" :key="m.member_id" class="member-chip">
+                {{ m.name }} <span class="member-tier">{{ m.tier }}</span>
+              </div>
+            </div>
+            <div v-for="round in session.rounds" :key="'opt-' + round.round_number" class="round-section">
+              <div class="round-label">Round {{ round.round_number }}</div>
+              <div
+                v-for="arg in round.arguments.filter(a => a.position === 'optimist')"
+                :key="arg.member_id + '-' + arg.round_number"
+                class="argument-card optimist-card"
+              >
+                <div class="arg-header">
+                  <span class="arg-member">{{ arg.member_id }}</span>
+                  <span class="arg-confidence">{{ (arg.confidence * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="arg-content">{{ arg.content }}</div>
+                <div v-if="arg.evidence?.length" class="arg-evidence">
+                  <div v-for="(ev, i) in arg.evidence" :key="i" class="evidence-item">{{ ev }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
 
-    <!-- Empty State -->
-    <div v-if="!session && !loading" class="empty-state">
-      <p>No deliberation session loaded.</p>
-      <button class="nav-btn secondary" style="margin-top: 12px" @click="backToSimulation">
-        Back to Simulation
-      </button>
-    </div>
+          <!-- Pessimist Council -->
+          <div class="council-panel pessimist">
+            <h3 class="council-title pessimist-title">Pessimist Council</h3>
+            <div class="members">
+              <div v-for="m in session.pessimist_council" :key="m.member_id" class="member-chip">
+                {{ m.name }} <span class="member-tier">{{ m.tier }}</span>
+              </div>
+            </div>
+            <div v-for="round in session.rounds" :key="'pes-' + round.round_number" class="round-section">
+              <div class="round-label">Round {{ round.round_number }}</div>
+              <div
+                v-for="arg in round.arguments.filter(a => a.position === 'pessimist')"
+                :key="arg.member_id + '-' + arg.round_number"
+                class="argument-card pessimist-card"
+              >
+                <div class="arg-header">
+                  <span class="arg-member">{{ arg.member_id }}</span>
+                  <span class="arg-confidence">{{ (arg.confidence * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="arg-content">{{ arg.content }}</div>
+                <div v-if="arg.evidence?.length" class="arg-evidence">
+                  <div v-for="(ev, i) in arg.evidence" :key="i" class="evidence-item">{{ ev }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-    <!-- Loading -->
-    <div v-if="loading" class="loading-state">
-      <div class="spinner"></div>
-      <p>Loading deliberation...</p>
+      <!-- Voting Results -->
+      <div v-if="session?.vote_results?.dimensions" class="voting-section">
+        <h3 class="section-title">Voting Results</h3>
+        <div class="vote-dimensions">
+          <div v-for="(dimData, dimName) in session.vote_results.dimensions" :key="dimName" class="dimension-card">
+            <div class="dim-name">{{ dimName }}</div>
+            <div class="vote-bar-container">
+              <div class="vote-label-a">{{ dimData.position_a_label }}</div>
+              <div class="vote-bar">
+                <div
+                  class="bar-fill position-a"
+                  :style="{ width: dimData.raw_percentage.position_a + '%' }"
+                >
+                  {{ dimData.raw_percentage.position_a }}%
+                </div>
+                <div
+                  class="bar-fill position-b"
+                  :style="{ width: dimData.raw_percentage.position_b + '%' }"
+                >
+                  {{ dimData.raw_percentage.position_b }}%
+                </div>
+                <div
+                  v-if="dimData.raw_percentage.neither > 0"
+                  class="bar-fill neither"
+                  :style="{ width: dimData.raw_percentage.neither + '%' }"
+                >
+                  {{ dimData.raw_percentage.neither }}%
+                </div>
+              </div>
+              <div class="vote-label-b">{{ dimData.position_b_label }}</div>
+            </div>
+            <div class="vote-meta">
+              <span>Total votes: {{ dimData.total_votes }}</span>
+              <span v-if="session.vote_results.contested_dimensions?.includes(dimName)" class="contested-badge">CONTESTED</span>
+              <span v-if="session.vote_results.neither_triggered?.includes(dimName)" class="neither-badge">NEITHER &gt;20%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Synthesis -->
+      <div v-if="session?.synthesis" class="synthesis-section">
+        <h3 class="section-title">Synthesis</h3>
+        <div class="synthesis-content" v-html="renderMarkdown(session.synthesis)"></div>
+      </div>
+
+      <!-- Empty State -->
+      <div v-if="!session && !loading" class="empty-state">
+        <p>No deliberation session loaded.</p>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="loading" class="loading-state">
+        <div class="spinner"></div>
+        <p>Loading deliberation...</p>
+      </div>
     </div>
   </div>
 </template>
@@ -263,8 +267,14 @@ const canSynthesize = computed(() => {
 })
 
 const isComplete = computed(() => {
-  // Complete when synthesis exists, or when debate is done and user could skip ahead
-  return session.value?.synthesis != null
+  if (!session.value) return false
+  // Complete when synthesis exists
+  if (session.value.synthesis != null) return true
+  // Also allow report generation if debate finished (even with failures) and status is completed
+  if (session.value.status === 'completed') return true
+  // Allow if rounds exist (debate ran, even with errors) - user can skip ahead
+  if (session.value.rounds?.length > 0) return true
+  return false
 })
 
 async function loadSession() {
@@ -375,7 +385,10 @@ async function handleGenerateReport() {
 
   generatingReport.value = true
   try {
-    const res = await generateReport({ simulation_id: simId })
+    const res = await generateReport({
+      simulation_id: simId,
+      deliberation_session_id: props.sessionId
+    })
     if (res.success && res.data?.report_id) {
       router.push({ name: 'Report', params: { reportId: res.data.report_id } })
     } else {
@@ -407,30 +420,37 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* Panel — matches Step3Simulation .simulation-panel */
 .deliberation-panel {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 20px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #FFFFFF;
+  font-family: 'Space Grotesk', 'Noto Sans SC', system-ui, sans-serif;
+  overflow: hidden;
 }
 
-/* Status Bar */
-.status-bar {
+/* ─── Control Bar (pinned top, matches Step3Simulation .control-bar) ─── */
+.control-bar {
+  background: #FFF;
+  padding: 12px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  background: #F8F9FA;
-  border: 1px solid #EAEAEA;
-  border-radius: 8px;
-  margin-bottom: 16px;
+  border-bottom: 1px solid #EAEAEA;
+  z-index: 10;
+  min-height: 52px;
+  flex-shrink: 0;
+  gap: 12px;
 }
 
-.status-info {
+.status-group {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
   color: #333;
+  flex-shrink: 0;
 }
 
 .status-dot {
@@ -438,6 +458,7 @@ onMounted(() => {
   height: 8px;
   border-radius: 50%;
   background: #CCC;
+  flex-shrink: 0;
 }
 .status-dot.idle { background: #999; }
 .status-dot.debating { background: #FF9800; animation: pulse 1.5s infinite; }
@@ -445,65 +466,151 @@ onMounted(() => {
 .status-dot.synthesizing { background: #9C27B0; animation: pulse 1.5s infinite; }
 .status-dot.done { background: #4CAF50; }
 
+.status-text {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.control-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.control-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #DDD;
+  border-radius: 4px;
+  background: #FFF;
+  color: #555;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.control-btn:hover:not(:disabled) { background: #F5F5F5; border-color: #BBB; }
+.control-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.control-btn.back { color: #888; border-color: #E0E0E0; }
+.control-btn.back:hover:not(:disabled) { background: #FAFAFA; border-color: #CCC; }
+
+.control-btn.debate { border-color: #FF9800; color: #E65100; }
+.control-btn.debate:hover:not(:disabled) { background: #FFF3E0; }
+.control-btn.vote { border-color: #2196F3; color: #1565C0; }
+.control-btn.vote:hover:not(:disabled) { background: #E3F2FD; }
+.control-btn.synthesize { border-color: #9C27B0; color: #7B1FA2; }
+.control-btn.synthesize:hover:not(:disabled) { background: #F3E5F5; }
+
+.control-btn.primary {
+  background: #000;
+  border-color: #000;
+  color: #FFF;
+}
+.control-btn.primary:hover:not(:disabled) { background: #333; }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
 
-/* Phase Progress */
+/* ─── Phase Progress ─── */
 .phase-progress {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
+  padding: 10px 24px;
   background: #FFF8E1;
-  border: 1px solid #FFE082;
-  border-radius: 6px;
-  margin-bottom: 16px;
+  border-bottom: 1px solid #FFE082;
   font-size: 13px;
   color: #5D4037;
+  flex-shrink: 0;
 }
 
 .progress-spinner {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border: 2px solid #FFE082;
   border-top-color: #FF9800;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
 }
 
 .progress-text {
   font-weight: 500;
 }
 
-/* Action Buttons */
-.action-buttons {
+/* ─── Error Banner ─── */
+.error-banner {
+  background: #FFF5F5;
+  border-bottom: 1px solid #FFCDD2;
+  padding: 12px 24px;
+  flex-shrink: 0;
+}
+
+.error-content {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
 }
 
-.action-btn {
-  padding: 6px 14px;
+.error-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #F44336;
+  color: #FFF;
   font-size: 12px;
-  font-weight: 600;
-  border: 1px solid #DDD;
-  border-radius: 6px;
-  background: #FFF;
-  color: #333;
-  cursor: pointer;
-  transition: all 0.2s;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
-.action-btn:hover:not(:disabled) { background: #F5F5F5; border-color: #BBB; }
-.action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.action-btn.debate { border-color: #FF9800; color: #E65100; }
-.action-btn.debate:hover:not(:disabled) { background: #FFF3E0; }
-.action-btn.vote { border-color: #2196F3; color: #1565C0; }
-.action-btn.vote:hover:not(:disabled) { background: #E3F2FD; }
-.action-btn.synthesize { border-color: #9C27B0; color: #7B1FA2; }
-.action-btn.synthesize:hover:not(:disabled) { background: #F3E5F5; }
 
-/* Councils */
+.error-text {
+  font-size: 13px;
+  color: #C62828;
+  font-weight: 500;
+}
+
+.error-hint {
+  font-size: 12px;
+  color: #999;
+  margin: 6px 0 0 30px;
+}
+
+/* ─── Scrollable Content Area (matches Step3Simulation .main-content-area) ─── */
+.main-content-area {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  background: #FFF;
+  padding: 20px 24px;
+}
+
+.main-content-area::-webkit-scrollbar {
+  width: 6px;
+}
+.main-content-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+.main-content-area::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+  transition: background 0.3s ease;
+}
+.main-content-area:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* ─── Councils ─── */
 .debate-area {
   margin-bottom: 24px;
 }
@@ -514,19 +621,28 @@ onMounted(() => {
   gap: 16px;
 }
 
+@media (max-width: 900px) {
+  .councils-container {
+    grid-template-columns: 1fr;
+  }
+}
+
 .council-panel {
   background: #FFF;
   border: 1px solid #EAEAEA;
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 2px;
+  padding: 16px 20px;
+  min-width: 0;
 }
 
 .council-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #EAEAEA;
+  border-bottom: 1px solid #F5F5F5;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 .optimist-title { color: #2E7D32; }
 .pessimist-title { color: #C62828; }
@@ -535,13 +651,13 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .member-chip {
   font-size: 11px;
   padding: 3px 8px;
-  border-radius: 3px;
+  border-radius: 2px;
   background: #F5F5F5;
   border: 1px solid #E0E0E0;
   color: #555;
@@ -553,7 +669,7 @@ onMounted(() => {
 }
 
 .round-section {
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .round-label {
@@ -562,14 +678,19 @@ onMounted(() => {
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 6px;
+  font-weight: 600;
 }
 
 .argument-card {
   background: #FAFAFA;
   border: 1px solid #EAEAEA;
-  border-radius: 6px;
-  padding: 12px;
+  border-radius: 2px;
+  padding: 12px 14px;
   margin-bottom: 8px;
+  transition: box-shadow 0.2s;
+}
+.argument-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 
 .optimist-card { border-left: 3px solid #4CAF50; }
@@ -582,19 +703,21 @@ onMounted(() => {
   font-size: 11px;
 }
 
-.arg-member { color: #666; }
-.arg-confidence { color: #999; }
+.arg-member { color: #666; font-weight: 500; }
+.arg-confidence { color: #999; font-family: 'JetBrains Mono', monospace; }
 
 .arg-content {
   font-size: 13px;
   line-height: 1.6;
   color: #333;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .arg-evidence {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid #EAEAEA;
+  border-top: 1px solid #F0F0F0;
 }
 
 .evidence-item {
@@ -607,18 +730,20 @@ onMounted(() => {
   color: #BBB;
 }
 
-/* Voting */
+/* ─── Voting ─── */
 .voting-section, .synthesis-section {
   margin-bottom: 24px;
 }
 
 .section-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #333;
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #EAEAEA;
+  border-bottom: 1px solid #F5F5F5;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .vote-dimensions {
@@ -630,7 +755,7 @@ onMounted(() => {
 .dimension-card {
   background: #FFF;
   border: 1px solid #EAEAEA;
-  border-radius: 8px;
+  border-radius: 2px;
   padding: 14px;
 }
 
@@ -650,7 +775,8 @@ onMounted(() => {
 .vote-label-a, .vote-label-b {
   font-size: 11px;
   color: #666;
-  min-width: 100px;
+  min-width: 80px;
+  flex-shrink: 0;
 }
 .vote-label-b { text-align: right; }
 
@@ -658,9 +784,10 @@ onMounted(() => {
   flex: 1;
   display: flex;
   height: 24px;
-  border-radius: 4px;
+  border-radius: 2px;
   overflow: hidden;
   background: #F0F0F0;
+  min-width: 0;
 }
 
 .bar-fill {
@@ -672,9 +799,9 @@ onMounted(() => {
   color: #FFF;
   min-width: 30px;
 }
-.bar-fill.position-a { background: #66BB6A; color: #FFF; }
-.bar-fill.position-b { background: #EF5350; color: #FFF; }
-.bar-fill.neither { background: #BDBDBD; color: #FFF; }
+.bar-fill.position-a { background: #66BB6A; }
+.bar-fill.position-b { background: #EF5350; }
+.bar-fill.neither { background: #BDBDBD; }
 
 .vote-meta {
   display: flex;
@@ -688,100 +815,36 @@ onMounted(() => {
   background: #FFF3E0;
   color: #E65100;
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: 2px;
   font-size: 10px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .neither-badge {
   background: #F3E5F5;
   color: #7B1FA2;
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: 2px;
   font-size: 10px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-/* Synthesis */
+/* ─── Synthesis ─── */
 .synthesis-content {
   background: #FFF;
   border: 1px solid #EAEAEA;
-  border-radius: 8px;
+  border-radius: 2px;
   padding: 20px;
   font-size: 13px;
   line-height: 1.7;
   color: #333;
 }
 
-/* Navigation */
-.navigation-section {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 0;
-  border-top: 1px solid #EAEAEA;
-  margin-top: 8px;
-}
-
-.nav-btn {
-  padding: 10px 20px;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.nav-btn.secondary {
-  background: #FFF;
-  border: 1px solid #DDD;
-  color: #555;
-}
-.nav-btn.secondary:hover { background: #F5F5F5; border-color: #BBB; }
-
-.nav-btn.primary {
-  background: #1976D2;
-  border: 1px solid #1565C0;
-  color: #FFF;
-}
-.nav-btn.primary:hover:not(:disabled) { background: #1565C0; }
-.nav-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* Navigation */
-.navigation-section {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 0;
-  border-top: 1px solid #EAEAEA;
-  margin-top: 8px;
-}
-
-.nav-btn {
-  padding: 10px 20px;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.nav-btn.secondary {
-  background: #FFF;
-  border: 1px solid #DDD;
-  color: #555;
-}
-.nav-btn.secondary:hover { background: #F5F5F5; border-color: #BBB; }
-
-.nav-btn.primary {
-  background: #1976D2;
-  border: 1px solid #1565C0;
-  color: #FFF;
-}
-.nav-btn.primary:hover:not(:disabled) { background: #1565C0; }
-.nav-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* Empty / Loading */
+/* ─── Empty / Loading ─── */
 .empty-state, .loading-state {
   text-align: center;
   padding: 60px 20px;
@@ -792,7 +855,7 @@ onMounted(() => {
   width: 24px;
   height: 24px;
   border: 2px solid #E0E0E0;
-  border-top-color: #1976D2;
+  border-top-color: #000;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin: 0 auto 12px;
