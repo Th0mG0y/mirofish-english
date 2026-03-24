@@ -864,4 +864,45 @@ onMounted(() => {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Error Banner */
+.error-banner {
+  background: #FFF5F5;
+  border: 1px solid #FFCDD2;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.error-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #F44336;
+  color: #FFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.error-text {
+  font-size: 13px;
+  color: #C62828;
+  font-weight: 500;
+}
+
+.error-hint {
+  font-size: 12px;
+  color: #999;
+  margin: 8px 0 0 32px;
+}
 </style>
