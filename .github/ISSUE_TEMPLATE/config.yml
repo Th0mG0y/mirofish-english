@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: mailto:th0mg0y@proton.me
+    about: Report security vulnerabilities privately by email.

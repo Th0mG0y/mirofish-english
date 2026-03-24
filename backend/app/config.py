@@ -22,6 +22,18 @@ else:
     load_dotenv(override=True)
 
 
+def _get_env(name: str, default: str | None = None) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+
+    normalized_value = value.strip()
+    if not normalized_value or normalized_value.startswith('#'):
+        return default
+
+    return normalized_value
+
+
 class Config:
     """Flask configuration class"""
 
@@ -33,12 +45,12 @@ class Config:
     JSON_AS_ASCII = False
 
     # Multi-provider LLM configuration
-    LLM_PROVIDER = os.environ.get('MIROFISH_LLM_PROVIDER', 'openai').lower()
-    LLM_API_KEY = os.environ.get('LLM_API_KEY')
-    LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
-    LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-5.4-mini')
-    ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
-    ANTHROPIC_MODEL_NAME = os.environ.get('ANTHROPIC_MODEL_NAME', 'claude-sonnet-4-6')
+    LLM_PROVIDER = _get_env('MIROFISH_LLM_PROVIDER', 'openai').lower()
+    LLM_API_KEY = _get_env('LLM_API_KEY')
+    LLM_BASE_URL = _get_env('LLM_BASE_URL', 'https://api.openai.com/v1')
+    LLM_MODEL_NAME = _get_env('LLM_MODEL_NAME', 'gpt-5.4-mini')
+    ANTHROPIC_API_KEY = _get_env('ANTHROPIC_API_KEY')
+    ANTHROPIC_MODEL_NAME = _get_env('ANTHROPIC_MODEL_NAME', 'claude-sonnet-4-6')
 
     # Neo4j configuration
     NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
@@ -86,36 +98,36 @@ class Config:
     MIROFISH_REGION = os.environ.get('MIROFISH_REGION', 'US')
 
     # Search configuration
-    SEARCH_PROVIDER = os.environ.get('MIROFISH_SEARCH_PROVIDER', LLM_PROVIDER).lower()
-    SEARCH_MODEL = os.environ.get('MIROFISH_SEARCH_MODEL', '')
+    SEARCH_PROVIDER = _get_env('MIROFISH_SEARCH_PROVIDER', LLM_PROVIDER).lower()
+    SEARCH_MODEL = _get_env('MIROFISH_SEARCH_MODEL', '')
     MIROFISH_MAX_SEARCHES_PER_AGENT = int(os.environ.get('MIROFISH_MAX_SEARCHES_PER_AGENT', '5'))
     MIROFISH_ENABLE_SEARCH_ENRICHMENT = os.environ.get('MIROFISH_ENABLE_SEARCH_ENRICHMENT', 'false').lower() == 'true'
     MIROFISH_NEWS_INJECTION_INTERVAL = int(os.environ.get('MIROFISH_NEWS_INJECTION_INTERVAL', '0'))
 
     # Graphiti configuration
-    GRAPHITI_LLM_PROVIDER = os.environ.get('GRAPHITI_LLM_PROVIDER', LLM_PROVIDER).lower()
-    GRAPHITI_LLM_API_KEY = os.environ.get('GRAPHITI_LLM_API_KEY')
-    GRAPHITI_LLM_BASE_URL = os.environ.get('GRAPHITI_LLM_BASE_URL', '')
-    GRAPHITI_LLM_MODEL = os.environ.get('GRAPHITI_LLM_MODEL', '')
-    GRAPHITI_EMBEDDER_PROVIDER = os.environ.get(
+    GRAPHITI_LLM_PROVIDER = _get_env('GRAPHITI_LLM_PROVIDER', LLM_PROVIDER).lower()
+    GRAPHITI_LLM_API_KEY = _get_env('GRAPHITI_LLM_API_KEY')
+    GRAPHITI_LLM_BASE_URL = _get_env('GRAPHITI_LLM_BASE_URL', '')
+    GRAPHITI_LLM_MODEL = _get_env('GRAPHITI_LLM_MODEL', '')
+    GRAPHITI_EMBEDDER_PROVIDER = _get_env(
         'GRAPHITI_EMBEDDER_PROVIDER',
         'ollama' if GRAPHITI_LLM_PROVIDER == 'anthropic' else 'openai'
     ).lower()
-    GRAPHITI_EMBEDDER_API_KEY = os.environ.get('GRAPHITI_EMBEDDER_API_KEY')
-    GRAPHITI_EMBEDDER_BASE_URL = os.environ.get('GRAPHITI_EMBEDDER_BASE_URL', '')
-    GRAPHITI_EMBEDDER_MODEL = os.environ.get(
+    GRAPHITI_EMBEDDER_API_KEY = _get_env('GRAPHITI_EMBEDDER_API_KEY')
+    GRAPHITI_EMBEDDER_BASE_URL = _get_env('GRAPHITI_EMBEDDER_BASE_URL', '')
+    GRAPHITI_EMBEDDER_MODEL = _get_env(
         'GRAPHITI_EMBEDDER_MODEL',
         'text-embedding-3-small'
         if GRAPHITI_EMBEDDER_PROVIDER == 'openai'
         else 'nomic-embed-text'
     )
-    GRAPHITI_RERANKER_PROVIDER = os.environ.get(
+    GRAPHITI_RERANKER_PROVIDER = _get_env(
         'GRAPHITI_RERANKER_PROVIDER',
         GRAPHITI_EMBEDDER_PROVIDER
     ).lower()
-    GRAPHITI_RERANKER_API_KEY = os.environ.get('GRAPHITI_RERANKER_API_KEY')
-    GRAPHITI_RERANKER_BASE_URL = os.environ.get('GRAPHITI_RERANKER_BASE_URL', '')
-    GRAPHITI_RERANKER_MODEL = os.environ.get(
+    GRAPHITI_RERANKER_API_KEY = _get_env('GRAPHITI_RERANKER_API_KEY')
+    GRAPHITI_RERANKER_BASE_URL = _get_env('GRAPHITI_RERANKER_BASE_URL', '')
+    GRAPHITI_RERANKER_MODEL = _get_env(
         'GRAPHITI_RERANKER_MODEL',
         LLM_MODEL_NAME
         if GRAPHITI_RERANKER_PROVIDER == 'openai'

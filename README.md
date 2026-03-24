@@ -210,6 +210,11 @@ Practical AGPL distribution and deployment notes for this repository are documen
 
 If you run this modified version for users over a network, the AGPL requires you to make the corresponding source code of the running version available to those users.
 
+## Contributing
+
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- [`SECURITY.md`](./SECURITY.md)
+
 ## Contact
 
 For private questions, collaboration, or licensing-related contact:
