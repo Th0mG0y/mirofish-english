@@ -233,21 +233,25 @@ class AnthropicProvider(LLMProvider):
         if system_content:
             kwargs["system"] = system_content
 
-        response = self.client.messages.create(**kwargs)
-
-        # Extract text content
+        # Use streaming to avoid Anthropic's 10-minute timeout on long requests
         content = ""
-        for block in response.content:
-            if hasattr(block, 'text'):
-                content += block.text
+        input_tokens = 0
+        output_tokens = 0
 
-        usage = None
-        if response.usage:
-            usage = {
-                "prompt_tokens": response.usage.input_tokens,
-                "completion_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
-            }
+        with self.client.messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                content += text
+            # Get final message for usage stats
+            final_message = stream.get_final_message()
+            if final_message and final_message.usage:
+                input_tokens = final_message.usage.input_tokens
+                output_tokens = final_message.usage.output_tokens
+
+        usage = {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        } if (input_tokens or output_tokens) else None
 
         return ProviderResponse(content=content, model=self.model, usage=usage)
 

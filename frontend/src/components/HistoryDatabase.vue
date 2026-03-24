@@ -33,8 +33,8 @@
         <div class="card-header">
           <span class="card-id">{{ formatSimulationId(project.simulation_id) }}</span>
           <div class="card-status-icons">
-            <span 
-              class="status-icon" 
+            <span
+              class="status-icon"
               :class="{ available: project.project_id, unavailable: !project.project_id }"
               title="Graph Build"
             >◇</span>
@@ -42,6 +42,11 @@
               class="status-icon available"
               title="Environment Setup"
             >◈</span>
+            <span
+              class="status-icon"
+              :class="{ available: project.deliberation_id, unavailable: !project.deliberation_id }"
+              title="Deliberation"
+            >⚖</span>
             <span
               class="status-icon"
               :class="{ available: project.report_id, unavailable: !project.report_id }"
@@ -170,18 +175,31 @@
                 <span class="btn-text">Env Setup</span>
               </button>
               <button
+                class="modal-btn btn-resume"
+                @click="goToSimulationStart"
+              >
+                <span class="btn-step">Step3</span>
+                <span class="btn-icon">▶</span>
+                <span class="btn-text">Simulation</span>
+              </button>
+              <button
+                class="modal-btn btn-deliberation"
+                @click="goToDeliberation"
+                :disabled="!selectedProject.deliberation_id"
+              >
+                <span class="btn-step">Step4</span>
+                <span class="btn-icon">⚖</span>
+                <span class="btn-text">Debate</span>
+              </button>
+              <button
                 class="modal-btn btn-report"
                 @click="goToReport"
                 :disabled="!selectedProject.report_id"
               >
-                <span class="btn-step">Step4</span>
+                <span class="btn-step">Step5</span>
                 <span class="btn-icon">◆</span>
                 <span class="btn-text">Report</span>
               </button>
-            </div>
-            <!-- Non-playable hint -->
-            <div class="modal-playback-hint">
-              <span class="hint-text">Step3 "Start Simulation" and Step5 "Deep Interaction" must be launched while running and do not support historical playback</span>
             </div>
           </div>
         </div>
@@ -418,6 +436,25 @@ const goToSimulation = () => {
     router.push({
       name: 'Simulation',
       params: { simulationId: selectedProject.value.simulation_id }
+    })
+    closeModal()
+  }
+}
+
+// Navigate to simulation start page (Step 3 - resume simulation)
+const goToSimulationStart = () => {
+  if (selectedProject.value?.simulation_id) {
+    router.push(`/simulation/${selectedProject.value.simulation_id}/start`)
+    closeModal()
+  }
+}
+
+// Navigate to deliberation page (Step 4)
+const goToDeliberation = () => {
+  if (selectedProject.value?.deliberation_id) {
+    router.push({
+      name: 'Deliberation',
+      params: { sessionId: selectedProject.value.deliberation_id }
     })
     closeModal()
   }
@@ -1314,6 +1351,8 @@ onUnmounted(() => {
 
 .modal-btn.btn-project .btn-icon { color: #3B82F6; }
 .modal-btn.btn-simulation .btn-icon { color: #F59E0B; }
+.modal-btn.btn-resume .btn-icon { color: #8B5CF6; }
+.modal-btn.btn-deliberation .btn-icon { color: #EC4899; }
 .modal-btn.btn-report .btn-icon { color: #10B981; }
 
 .modal-btn:hover:not(:disabled) .btn-text {

@@ -872,6 +872,18 @@ def _get_report_id_for_simulation(simulation_id: str) -> str:
         return None
 
 
+def _get_deliberation_id_for_simulation(simulation_id: str) -> str:
+    """Get the deliberation session_id for a simulation, if one exists."""
+    try:
+        from ..models.deliberation_manager import DeliberationManager
+        session = DeliberationManager.get_by_simulation(simulation_id)
+        if session:
+            return session.session_id
+    except Exception as e:
+        logger.warning(f"Failed to find deliberation for simulation {simulation_id}: {e}")
+    return None
+
+
 @simulation_bp.route('/history', methods=['GET'])
 def get_simulation_history():
     """
@@ -958,6 +970,9 @@ def get_simulation_history():
             
             # Get associated report_id (find the latest report for this simulation)
             sim_dict["report_id"] = _get_report_id_for_simulation(sim.simulation_id)
+
+            # Get associated deliberation_id
+            sim_dict["deliberation_id"] = _get_deliberation_id_for_simulation(sim.simulation_id)
 
             # Add version number
             sim_dict["version"] = "v1.0.2"

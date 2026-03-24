@@ -66,10 +66,6 @@ Quick template choices:
 - `All local via LM Studio`: `.env.lmstudio.example`
 - `Mixed/custom`: `.env.example`
 
-## 🌐 Live Demo
-
-Welcome to visit our online demo environment and experience a prediction simulation on trending public opinion events we've prepared for you: [mirofish-live-demo](https://666ghj.github.io/mirofish-demo/)
-
 ## 📸 Screenshots
 
 <div align="center">
@@ -89,25 +85,6 @@ Welcome to visit our online demo environment and experience a prediction simulat
 </table>
 </div>
 
-## 🎬 Demo Videos
-
-### 1. Wuhan University Public Opinion Simulation + MiroFish Project Introduction
-
-<div align="center">
-<a href="https://www.bilibili.com/video/BV1VYBsBHEMY/" target="_blank"><img src="./static/image/武大模拟演示封面.png" alt="MiroFish Demo Video" width="75%"/></a>
-
-Click the image to watch the complete demo video for prediction using BettaFish-generated "Wuhan University Public Opinion Report"
-</div>
-
-### 2. Dream of the Red Chamber Lost Ending Simulation
-
-<div align="center">
-<a href="https://www.bilibili.com/video/BV1cPk3BBExq" target="_blank"><img src="./static/image/红楼梦模拟推演封面.jpg" alt="MiroFish Demo Video" width="75%"/></a>
-
-Click the image to watch MiroFish's deep prediction of the lost ending based on hundreds of thousands of words from the first 80 chapters of "Dream of the Red Chamber"
-</div>
-
-> **Financial Prediction**, **Political News Prediction** and more examples coming soon...
 
 ## 🔄 Workflow
 
@@ -256,28 +233,8 @@ For private questions, collaboration, or licensing-related contact:
 
 - `th0mg0y@proton.me`
 
-## 📬 More Community
-
-<div align="center">
-<img src="./static/image/QQ群.png" alt="QQ Discussion Group" width="60%"/>
-</div>
-
-&nbsp;
-
-The MiroFish team is recruiting full-time/intern positions long-term. If you're interested in multi-Agent applications, feel free to send your resume to: **mirofish@shanda.com**
-
 ## 📄 Acknowledgments
 
 **MiroFish has received strategic support and incubation from Shanda Group!**
 
 MiroFish's simulation engine is powered by **[OASIS](https://github.com/camel-ai/oasis)**. We sincerely thank the CAMEL-AI team for their open-source contributions!
-
-## 📈 Project Statistics
-
-<a href="https://www.star-history.com/#666ghj/MiroFish&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=666ghj/MiroFish&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=666ghj/MiroFish&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=666ghj/MiroFish&type=date&legend=top-left" />
- </picture>
-</a>

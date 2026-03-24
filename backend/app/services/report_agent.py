@@ -1212,6 +1212,90 @@ class ReportAgent:
             return True
         return False
     
+    def _build_deliberation_context_for_section(self, section_title: str) -> str:
+        """Build deliberation context to inject into section generation when relevant."""
+        # Check if the section title suggests it needs deliberation data
+        deliberation_keywords = [
+            'council', 'deliberation', 'debate', 'adversarial', 'voting',
+            'consensus', 'synthesis', 'forecast', 'contested', 'optimist',
+            'pessimist', 'bull', 'bear', 'argument', 'position',
+            'risk', 'opportunity', 'outlook', 'assessment', 'conclusion',
+            'recommendation', 'summary', 'executive'
+        ]
+        title_lower = section_title.lower()
+        if not any(kw in title_lower for kw in deliberation_keywords):
+            return ""
+
+        try:
+            from ..models.deliberation_manager import DeliberationManager
+            delib_session = DeliberationManager.get(self.deliberation_session_id)
+            if not delib_session:
+                return ""
+
+            ctx = "\n\n[Adversarial Council Deliberation Data - USE THIS for writing this section]\n"
+            ctx += f"Topic: {delib_session.topic}\n"
+            ctx += f"Debate Rounds: {len(delib_session.rounds)}\n"
+
+            # Include council members
+            if delib_session.optimist_council:
+                ctx += "\nOptimist Council Members:\n"
+                for m in delib_session.optimist_council:
+                    ctx += f"  - {m.name} ({m.tier})\n"
+            if delib_session.pessimist_council:
+                ctx += "\nPessimist Council Members:\n"
+                for m in delib_session.pessimist_council:
+                    ctx += f"  - {m.name} ({m.tier})\n"
+
+            # Include arguments (more generous than the planning phase)
+            for rnd in delib_session.rounds:
+                ctx += f"\n--- Round {rnd.round_number} ---\n"
+                for arg in rnd.arguments:
+                    label = "OPTIMIST" if arg.position == "optimist" else "PESSIMIST"
+                    cred = f" [credibility: {arg.credibility_score:.0%}]" if arg.credibility_score is not None else ""
+                    ctx += f"[{label} - {arg.member_id}]{cred} (confidence: {arg.confidence:.0%})\n"
+                    ctx += f"{arg.content[:500]}\n"
+                    if arg.evidence:
+                        ctx += "Evidence: " + "; ".join(arg.evidence[:5]) + "\n"
+
+            # Include voting results
+            if delib_session.vote_results:
+                ctx += "\n[Voting Results]\n"
+                dims = delib_session.vote_results.get("dimensions", {})
+                for dim_name, dim_data in dims.items():
+                    pct = dim_data.get("raw_percentage", {})
+                    ctx += f"  {dim_name}: "
+                    ctx += f"{dim_data.get('position_a_label', 'A')}={pct.get('position_a', 0)}%, "
+                    ctx += f"{dim_data.get('position_b_label', 'B')}={pct.get('position_b', 0)}%, "
+                    ctx += f"Neither={pct.get('neither', 0)}%\n"
+
+                contested = delib_session.vote_results.get("contested_dimensions", [])
+                if contested:
+                    ctx += f"Contested dimensions (40-60% split): {', '.join(contested)}\n"
+                neither = delib_session.vote_results.get("neither_triggered", [])
+                if neither:
+                    ctx += f"Neither threshold triggered (>20%): {', '.join(neither)}\n"
+
+            # Include synthesis
+            if delib_session.synthesis:
+                ctx += f"\n[Synthesis]\n{delib_session.synthesis[:2000]}\n"
+
+            # Include quality signals
+            if delib_session.quality_signals:
+                ctx += f"\n[Quality Signals]\n"
+                for signal in delib_session.quality_signals:
+                    if isinstance(signal, dict):
+                        for key, val in signal.items():
+                            ctx += f"  {key}: {val}\n"
+                    else:
+                        ctx += f"  {signal}\n"
+
+            logger.info(f"Deliberation context injected for section: {section_title}")
+            return ctx
+
+        except Exception as e:
+            logger.warning(f"Failed to build deliberation context for section '{section_title}': {e}")
+            return ""
+
     def _get_tools_description(self) -> str:
         """Generate tool description text"""
         desc_parts = ["Available tools:"]
@@ -1391,11 +1475,17 @@ class ReportAgent:
             section_title=section.title,
         )
 
+        # Inject deliberation context for sections that need it
+        if self.deliberation_session_id:
+            delib_context = self._build_deliberation_context_for_section(section.title)
+            if delib_context:
+                user_prompt += delib_context
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         # ReACT loop
         tool_calls_count = 0
         max_iterations = 5  # Maximum iterations
