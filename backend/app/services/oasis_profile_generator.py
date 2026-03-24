@@ -1014,10 +1014,11 @@ Important:
 
             # Write data rows
             for idx, profile in enumerate(profiles):
-                # user_char: full persona (bio + persona), used in LLM system prompt
+                # user_char: persona summary (truncated to reduce memory pressure in OASIS subprocess)
                 user_char = profile.bio
                 if profile.persona and profile.persona != profile.bio:
                     user_char = f"{profile.bio} {profile.persona}"
+                user_char = user_char[:500]
                 # Handle newlines (replaced with spaces in CSV)
                 user_char = user_char.replace('\n', ' ').replace('\r', ' ')
 
@@ -1081,7 +1082,7 @@ Important:
                 "username": profile.user_name,
                 "name": profile.name,
                 "bio": profile.bio[:150] if profile.bio else f"{profile.name}",
-                "persona": profile.persona or f"{profile.name} is a participant in social discussions.",
+                "persona": (profile.persona or f"{profile.name} is a participant in social discussions.")[:500],
                 "karma": profile.karma if profile.karma else 1000,
                 "created_at": profile.created_at,
                 # OASIS required fields - ensure all have default values

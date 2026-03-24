@@ -98,6 +98,25 @@ class LLMClient:
         content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
         return content
 
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        response_format: Optional[Dict] = None
+    ) -> Dict[str, Any]:
+        """
+        Chat completion that returns a dict with 'content' key.
+        Compatibility wrapper around chat() for callers that expect the dict format.
+        """
+        content = self.chat(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format
+        )
+        return {"content": content}
+
     def web_search(self, query: str, context: str = ""):
         """
         Perform a web search using the configured search provider.

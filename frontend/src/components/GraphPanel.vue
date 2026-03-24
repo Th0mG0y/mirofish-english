@@ -26,25 +26,6 @@
       <div v-if="graphData" class="graph-view">
         <svg ref="graphSvg" class="graph-svg"></svg>
         
-        
-        <!-- Hint shown after simulation ends -->
-        <div v-if="showSimulationFinishedHint" class="graph-building-hint finished-hint">
-          <div class="hint-icon-wrapper">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="hint-icon">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="16" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-            </svg>
-          </div>
-          <span class="hint-text">A small amount of content is still processing; it is recommended to manually refresh the graph later</span>
-          <button class="hint-close-btn" @click="dismissFinishedHint" title="Close hint">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        </div>
-        
         <!-- Node/edge detail panel -->
         <div v-if="selectedItem" class="detail-panel">
           <div class="detail-panel-header">
@@ -240,24 +221,14 @@ const emit = defineEmits(['refresh', 'toggle-maximize'])
 const graphContainer = ref(null)
 const graphSvg = ref(null)
 const selectedItem = ref(null)
-const showEdgeLabels = ref(true) // Show edge labels by default
+const savedLabelState = localStorage.getItem('mirofish-show-edge-labels')
+const showEdgeLabels = ref(savedLabelState !== null ? savedLabelState === 'true' : true)
 const expandedSelfLoops = ref(new Set()) // Expanded self-loop items
-const showSimulationFinishedHint = ref(false) // Hint shown after simulation ends
-const wasSimulating = ref(false) // Track whether previously simulating
 
-// Dismiss the simulation-finished hint
-const dismissFinishedHint = () => {
-  showSimulationFinishedHint.value = false
-}
-
-// Watch isSimulating changes to detect simulation end
-watch(() => props.isSimulating, (newValue, oldValue) => {
-  if (wasSimulating.value && !newValue) {
-    // Transitioned from simulating to not simulating, show finished hint
-    showSimulationFinishedHint.value = true
-  }
-  wasSimulating.value = newValue
-}, { immediate: true })
+// Persist label toggle to localStorage
+watch(showEdgeLabels, (newVal) => {
+  localStorage.setItem('mirofish-show-edge-labels', String(newVal))
+})
 
 // Toggle self-loop item expanded/collapsed state
 const toggleSelfLoop = (id) => {
@@ -1185,50 +1156,6 @@ onUnmounted(() => {
 @keyframes breathe {
   0%, 100% { opacity: 0.7; transform: scale(1); filter: drop-shadow(0 0 2px rgba(76, 175, 80, 0.3)); }
   50% { opacity: 1; transform: scale(1.15); filter: drop-shadow(0 0 8px rgba(76, 175, 80, 0.6)); }
-}
-
-/* Hint style shown after simulation ends */
-.graph-building-hint.finished-hint {
-  background: rgba(0, 0, 0, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.finished-hint .hint-icon-wrapper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.finished-hint .hint-icon {
-  width: 18px;
-  height: 18px;
-  color: #FFF;
-}
-
-.finished-hint .hint-text {
-  flex: 1;
-  white-space: nowrap;
-}
-
-.hint-close-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  background: rgba(255, 255, 255, 0.2);
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  color: #FFF;
-  transition: all 0.2s;
-  margin-left: 8px;
-  flex-shrink: 0;
-}
-
-.hint-close-btn:hover {
-  background: rgba(255, 255, 255, 0.35);
-  transform: scale(1.1);
 }
 
 /* Loading spinner */

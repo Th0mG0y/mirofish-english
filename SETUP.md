@@ -452,6 +452,10 @@ The first graph build may be slower because Graphiti creates Neo4j indexes the f
 
 That is normal.
 
+## Step 11. Simulation Rounds
+
+When running a simulation, keep the number of rounds **at or below 20**. Higher values send many LLM calls in a short window and are likely to trigger OpenAI (or Anthropic) rate limits, which will cause the simulation to fail mid-run. Start with 5-10 rounds for your first test and increase only if your API plan allows it.
+
 ## Troubleshooting
 
 ### `python`, `node`, or `uv` is not recognized

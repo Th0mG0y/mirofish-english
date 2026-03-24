@@ -1252,13 +1252,36 @@ async def run_twitter_simulation(
             continue
         
         actions = {agent: LLMAction() for _, agent in active_agents}
-        await result.env.step(actions)
-        
+
+        # Retry env.step with backoff to survive transient rate-limit errors
+        step_success = False
+        for attempt in range(3):
+            try:
+                await result.env.step(actions)
+                step_success = True
+                break
+            except Exception as step_err:
+                err_msg = str(step_err).lower()
+                is_rate_limit = 'rate' in err_msg or '429' in err_msg or 'limit' in err_msg
+                if is_rate_limit and attempt < 2:
+                    wait_time = (attempt + 1) * 10  # 10s, 20s
+                    log_info(f"Rate limit hit at round {round_num + 1}, waiting {wait_time}s before retry (attempt {attempt + 1}/3)")
+                    await asyncio.sleep(wait_time)
+                else:
+                    log_info(f"env.step failed at round {round_num + 1}: {step_err}")
+                    break
+
+        if not step_success:
+            log_info(f"Skipping round {round_num + 1} after step failure")
+            if action_logger:
+                action_logger.log_round_end(round_num + 1, 0)
+            continue
+
         # Fetch actually executed actions from database and record them
         actual_actions, last_rowid = fetch_new_actions_from_db(
             db_path, last_rowid, agent_names
         )
-        
+
         round_action_count = 0
         for action_data in actual_actions:
             if action_logger:
@@ -1271,23 +1294,23 @@ async def run_twitter_simulation(
                 )
                 total_actions += 1
                 round_action_count += 1
-        
+
         if action_logger:
             action_logger.log_round_end(round_num + 1, round_action_count)
-        
+
         if (round_num + 1) % 20 == 0:
             progress = (round_num + 1) / total_rounds * 100
             log_info(f"Day {simulated_day}, {simulated_hour:02d}:00 - Round {round_num + 1}/{total_rounds} ({progress:.1f}%)")
-    
+
     # Note: do not close the environment; keep it open for Interview use
-    
+
     if action_logger:
         action_logger.log_simulation_end(total_rounds, total_actions)
-    
+
     result.total_actions = total_actions
     elapsed = (datetime.now() - start_time).total_seconds()
     log_info(f"Simulation loop complete! Elapsed: {elapsed:.1f}s, total actions: {total_actions}")
-    
+
     return result
 
 
@@ -1451,13 +1474,36 @@ async def run_reddit_simulation(
             continue
         
         actions = {agent: LLMAction() for _, agent in active_agents}
-        await result.env.step(actions)
-        
+
+        # Retry env.step with backoff to survive transient rate-limit errors
+        step_success = False
+        for attempt in range(3):
+            try:
+                await result.env.step(actions)
+                step_success = True
+                break
+            except Exception as step_err:
+                err_msg = str(step_err).lower()
+                is_rate_limit = 'rate' in err_msg or '429' in err_msg or 'limit' in err_msg
+                if is_rate_limit and attempt < 2:
+                    wait_time = (attempt + 1) * 10  # 10s, 20s
+                    log_info(f"Rate limit hit at round {round_num + 1}, waiting {wait_time}s before retry (attempt {attempt + 1}/3)")
+                    await asyncio.sleep(wait_time)
+                else:
+                    log_info(f"env.step failed at round {round_num + 1}: {step_err}")
+                    break
+
+        if not step_success:
+            log_info(f"Skipping round {round_num + 1} after step failure")
+            if action_logger:
+                action_logger.log_round_end(round_num + 1, 0)
+            continue
+
         # Fetch actually executed actions from database and record them
         actual_actions, last_rowid = fetch_new_actions_from_db(
             db_path, last_rowid, agent_names
         )
-        
+
         round_action_count = 0
         for action_data in actual_actions:
             if action_logger:
@@ -1470,19 +1516,19 @@ async def run_reddit_simulation(
                 )
                 total_actions += 1
                 round_action_count += 1
-        
+
         if action_logger:
             action_logger.log_round_end(round_num + 1, round_action_count)
-        
+
         if (round_num + 1) % 20 == 0:
             progress = (round_num + 1) / total_rounds * 100
             log_info(f"Day {simulated_day}, {simulated_hour:02d}:00 - Round {round_num + 1}/{total_rounds} ({progress:.1f}%)")
-    
+
     # Note: do not close the environment; keep it open for Interview use
-    
+
     if action_logger:
         action_logger.log_simulation_end(total_rounds, total_actions)
-    
+
     result.total_actions = total_actions
     elapsed = (datetime.now() - start_time).total_seconds()
     log_info(f"Simulation loop complete! Elapsed: {elapsed:.1f}s, total actions: {total_actions}")
@@ -1578,15 +1624,30 @@ async def main():
     reddit_result: Optional[PlatformSimulation] = None
     
     if args.twitter_only:
-        twitter_result = await run_twitter_simulation(config, simulation_dir, twitter_logger, log_manager, args.max_rounds)
+        try:
+            twitter_result = await run_twitter_simulation(config, simulation_dir, twitter_logger, log_manager, args.max_rounds)
+        except Exception as e:
+            log_manager.error(f"Twitter simulation crashed: {e}")
+            twitter_result = None
     elif args.reddit_only:
-        reddit_result = await run_reddit_simulation(config, simulation_dir, reddit_logger, log_manager, args.max_rounds)
+        try:
+            reddit_result = await run_reddit_simulation(config, simulation_dir, reddit_logger, log_manager, args.max_rounds)
+        except Exception as e:
+            log_manager.error(f"Reddit simulation crashed: {e}")
+            reddit_result = None
     else:
         # Run in parallel (each platform uses its own logger)
+        # return_exceptions=True prevents one platform crash from killing the other
         results = await asyncio.gather(
             run_twitter_simulation(config, simulation_dir, twitter_logger, log_manager, args.max_rounds),
             run_reddit_simulation(config, simulation_dir, reddit_logger, log_manager, args.max_rounds),
+            return_exceptions=True,
         )
+        for i, result in enumerate(results):
+            platform_name = "Twitter" if i == 0 else "Reddit"
+            if isinstance(result, Exception):
+                log_manager.error(f"{platform_name} simulation crashed: {result}")
+                results[i] = None
         twitter_result, reddit_result = results
     
     total_elapsed = (datetime.now() - start_time).total_seconds()
