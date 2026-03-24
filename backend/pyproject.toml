@@ -19,6 +19,9 @@ dependencies = [
     # Zep Cloud
     "zep-cloud==3.13.0",
 
+    # Graph memory (Graphiti)
+    "graphiti-core>=0.20.0",
+
     # OASIS social media simulation
     "camel-oasis==0.2.5",
     "camel-ai==0.2.78",
@@ -53,6 +56,7 @@ constraint-dependencies = [
 override-dependencies = [
     "pillow>=12.1.1",          # camel-ai pins <11.0.0; CVE-2026-25990
     "unstructured>=0.18.18",   # camel-oasis pins ==0.13.7; CVE-2025-64712
+    "neo4j>=5.26.0",           # camel-oasis pins ==5.23.0; graphiti-core needs >=5.26
 ]
 
 [project.optional-dependencies]

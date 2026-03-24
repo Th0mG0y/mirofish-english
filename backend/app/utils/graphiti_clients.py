@@ -8,7 +8,6 @@ from graphiti_core.cross_encoder.client import CrossEncoderClient
 from graphiti_core.embedder.client import EmbedderClient
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.helpers import semaphore_gather
-from graphiti_core.llm_client.anthropic_client import AnthropicClient as GraphitiAnthropicClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient as GraphitiOpenAIClient
 from openai import AsyncOpenAI
@@ -95,7 +94,7 @@ class CompatibleOpenAIRerankerClient(CrossEncoderClient):
 
     async def _create_relevance_response(self, query: str, passage: str):
         request_kwargs = {
-            'model': self.config.model or 'gpt-4.1-nano',
+            'model': self.config.model or Config.LLM_MODEL_NAME,
             'messages': [
                 {
                     'role': 'system',
@@ -183,6 +182,7 @@ class CompatibleOpenAIRerankerClient(CrossEncoderClient):
 
 def create_graphiti_llm_client():
     if Config.GRAPHITI_LLM_PROVIDER == 'anthropic':
+        from graphiti_core.llm_client.anthropic_client import AnthropicClient as GraphitiAnthropicClient
         return GraphitiAnthropicClient(
             config=LLMConfig(
                 api_key=Config.get_graphiti_llm_api_key(),
@@ -190,10 +190,14 @@ def create_graphiti_llm_client():
             )
         )
 
+    base_url = Config.GRAPHITI_LLM_BASE_URL or Config.LLM_BASE_URL
+    if not base_url and Config.GRAPHITI_LLM_PROVIDER == 'ollama':
+        base_url = Config.OLLAMA_BASE_URL
+
     return GraphitiOpenAIClient(
         config=LLMConfig(
             api_key=Config.get_graphiti_llm_api_key(),
-            base_url=Config.GRAPHITI_LLM_BASE_URL or Config.LLM_BASE_URL,
+            base_url=base_url,
             model=Config.get_graphiti_llm_model(),
         )
     )

@@ -52,6 +52,11 @@ class Config:
     ANTHROPIC_API_KEY = _get_env('ANTHROPIC_API_KEY')
     ANTHROPIC_MODEL_NAME = _get_env('ANTHROPIC_MODEL_NAME', 'claude-sonnet-4-6')
 
+    # Ollama configuration
+    OLLAMA_API_KEY = _get_env('OLLAMA_API_KEY')  # For Ollama cloud web search
+    OLLAMA_BASE_URL = _get_env('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
+    OLLAMA_MODEL_NAME = _get_env('OLLAMA_MODEL_NAME', '')  # Falls back to LLM_MODEL_NAME
+
     # Neo4j configuration
     NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
     NEO4J_USER = os.environ.get('NEO4J_USER', 'neo4j')
@@ -145,6 +150,8 @@ class Config:
             return explicit_model
         if provider_name == 'anthropic':
             return cls.ANTHROPIC_MODEL_NAME
+        if provider_name == 'ollama':
+            return cls.OLLAMA_MODEL_NAME or cls.LLM_MODEL_NAME
         if provider_name == 'openai':
             return cls.LLM_MODEL_NAME
         raise ValueError(f"Unsupported provider: {provider_name}")
@@ -168,6 +175,13 @@ class Config:
             if not api_key:
                 raise ValueError("Graphiti Anthropic API key is not configured")
             return api_key
+
+        if cls.GRAPHITI_LLM_PROVIDER == 'ollama':
+            return resolve_openai_compatible_api_key(
+                api_key=cls.GRAPHITI_LLM_API_KEY,
+                base_url=cls.GRAPHITI_LLM_BASE_URL or cls.OLLAMA_BASE_URL,
+                provider_name='ollama',
+            )
 
         return resolve_openai_compatible_api_key(
             api_key=cls.GRAPHITI_LLM_API_KEY or cls.LLM_API_KEY,
@@ -204,15 +218,15 @@ class Config:
     def validate(cls):
         """Validate required configuration"""
         errors = []
-        supported_remote_providers = {'openai', 'anthropic'}
+        supported_providers = {'openai', 'anthropic', 'ollama'}
         supported_graphiti_vector_providers = {'openai', 'ollama', 'lmstudio'}
 
-        if cls.LLM_PROVIDER not in supported_remote_providers:
-            errors.append("MIROFISH_LLM_PROVIDER must be one of: openai, anthropic")
-        if cls.SEARCH_PROVIDER not in supported_remote_providers:
-            errors.append("MIROFISH_SEARCH_PROVIDER must be one of: openai, anthropic")
-        if cls.GRAPHITI_LLM_PROVIDER not in supported_remote_providers:
-            errors.append("GRAPHITI_LLM_PROVIDER must be one of: openai, anthropic")
+        if cls.LLM_PROVIDER not in supported_providers:
+            errors.append("MIROFISH_LLM_PROVIDER must be one of: openai, anthropic, ollama")
+        if cls.SEARCH_PROVIDER not in supported_providers:
+            errors.append("MIROFISH_SEARCH_PROVIDER must be one of: openai, anthropic, ollama")
+        if cls.GRAPHITI_LLM_PROVIDER not in supported_providers:
+            errors.append("GRAPHITI_LLM_PROVIDER must be one of: openai, anthropic, ollama")
         if cls.GRAPHITI_EMBEDDER_PROVIDER not in supported_graphiti_vector_providers:
             errors.append("GRAPHITI_EMBEDDER_PROVIDER must be one of: openai, ollama, lmstudio")
         if cls.GRAPHITI_RERANKER_PROVIDER not in supported_graphiti_vector_providers:
@@ -225,6 +239,7 @@ class Config:
                 errors.append("LLM_API_KEY is not configured (required when MIROFISH_LLM_PROVIDER=openai unless LLM_BASE_URL points to a local OpenAI-compatible server)")
         if cls.LLM_PROVIDER == 'anthropic' and not cls.ANTHROPIC_API_KEY:
             errors.append("ANTHROPIC_API_KEY is not configured (required when MIROFISH_LLM_PROVIDER=anthropic)")
+        # ollama provider needs no API key for local inference (key auto-resolves to "ollama")
 
         if cls.SEARCH_PROVIDER == 'openai':
             try:
@@ -233,6 +248,7 @@ class Config:
                 errors.append("LLM_API_KEY is not configured (required when MIROFISH_SEARCH_PROVIDER=openai unless LLM_BASE_URL points to a local OpenAI-compatible server)")
         if cls.SEARCH_PROVIDER == 'anthropic' and not cls.ANTHROPIC_API_KEY:
             errors.append("ANTHROPIC_API_KEY is not configured (required when MIROFISH_SEARCH_PROVIDER=anthropic)")
+        # ollama search provider: OLLAMA_API_KEY is optional (only needed for cloud web search)
 
         try:
             cls.get_graphiti_llm_api_key()
