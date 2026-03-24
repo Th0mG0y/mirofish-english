@@ -440,7 +440,7 @@ class TwitterSimulationRunner:
         
         # If not in .env, use config as fallback
         if not llm_model:
-            llm_model = self.config.get("llm_model", "gpt-4o-mini")
+            llm_model = self.config.get("llm_model", "gpt-5.4-mini")
 
         # Set environment variables required by camel-ai
         if llm_api_key:

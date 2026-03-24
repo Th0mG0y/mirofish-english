@@ -15,11 +15,11 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from openai import OpenAI
 from zep_cloud.client import Zep
 
 from ..config import Config
 from ..utils.logger import get_logger
+from ..utils.llm_provider import ProviderFactory
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
 logger = get_logger('mirofish.oasis_profile')
@@ -185,16 +185,21 @@ class OasisProfileGenerator:
         zep_api_key: Optional[str] = None,
         graph_id: Optional[str] = None
     ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model_name = model_name or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY is not configured")
-        
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
+        self.provider_name = Config.LLM_PROVIDER
+        self.llm_provider = ProviderFactory.create_main_provider(
+            api_key=api_key,
+            base_url=base_url,
+            model=model_name,
+        )
+        self.base_url = base_url or (
+            Config.LLM_BASE_URL
+            if self.provider_name == "openai"
+            else "https://api.anthropic.com"
+        )
+        self.model_name = getattr(
+            self.llm_provider,
+            "model",
+            model_name or Config.get_provider_model(self.provider_name),
         )
         
         # Zep client for retrieving rich context
@@ -526,24 +531,15 @@ class OasisProfileGenerator:
         
         for attempt in range(max_attempts):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
+                response = self.llm_provider.chat(
                     messages=[
                         {"role": "system", "content": self._get_system_prompt(is_individual)},
                         {"role": "user", "content": prompt}
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.7 - (attempt * 0.1)  # Lower temperature with each retry
-                    # Do not set max_tokens, let the LLM generate freely
                 )
-                
-                content = response.choices[0].message.content
-                
-                # Check if truncated (finish_reason is not 'stop')
-                finish_reason = response.choices[0].finish_reason
-                if finish_reason == 'length':
-                    logger.warning(f"LLM output was truncated (attempt {attempt+1}), attempting repair...")
-                    content = self._fix_truncated_json(content)
+                content = response.content
 
                 # Attempt to parse JSON
                 try:

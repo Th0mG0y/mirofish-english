@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 from openai import OpenAI
 
 from ..config import Config
+from .openai_compatible import resolve_openai_compatible_api_key
 
 
 class LLMClient:
@@ -38,12 +39,14 @@ class LLMClient:
             self.model = getattr(self._provider, 'model', model or Config.LLM_MODEL_NAME)
             self.client = None
         else:
-            self.api_key = api_key or Config.LLM_API_KEY
             self.base_url = base_url or Config.LLM_BASE_URL
             self.model = model or Config.LLM_MODEL_NAME
-
-            if not self.api_key:
-                raise ValueError("LLM_API_KEY is not configured")
+            self.api_key = resolve_openai_compatible_api_key(
+                api_key=api_key,
+                base_url=self.base_url,
+                provider_name='openai',
+                fallback=Config.LLM_API_KEY,
+            )
 
             self.client = OpenAI(
                 api_key=self.api_key,

@@ -8,7 +8,6 @@ A Simple and Universal Swarm Intelligence Engine, Predicting Anything
 </br>
 <em>A Simple and Universal Swarm Intelligence Engine, Predicting Anything</em>
 
-<a href="https://www.shanda.com/" target="_blank"><img src="./static/image/shanda_logo.png" alt="666ghj%2MiroFish | Shanda" height="40"/></a>
 
 [![GitHub Stars](https://img.shields.io/github/stars/666ghj/MiroFish?style=flat-square&color=DAA520)](https://github.com/666ghj/MiroFish/stargazers)
 [![GitHub Watchers](https://img.shields.io/github/watchers/666ghj/MiroFish?style=flat-square)](https://github.com/666ghj/MiroFish/watchers)
@@ -48,18 +47,26 @@ Instead, it uses:
 
 - `Graphiti` for knowledge-graph construction
 - a local `Neo4j` database running on your own machine
-- `Anthropic` for Graphiti extraction
-- `OpenAI` for the main app model plus Graphiti embeddings/reranking
+- separate provider settings for the main app, Graphiti extraction, embeddings, and reranking
+- optional local vector models through `Ollama` or `LM Studio`
 
 What that means in practice:
 
 - you need a local Neo4j instance running before graph building will work
-- you currently need both an OpenAI API key and an Anthropic API key for the full experience
+- you can run OpenAI-only, Anthropic plus local vectors, or a mixed setup
 - the old Zep-based quick start is no longer the correct setup path for this implementation
 
 If you want a full beginner-friendly walkthrough, including where to get API keys and exactly which models to set, start here:
 
 - [`SETUP.md`](./SETUP.md)
+
+Quick template choices:
+
+- `OpenAI-only`: `.env.openai.example`
+- `Anthropic + OpenAI vectors`: `.env.anthropic.example`
+- `All local via Ollama`: `.env.ollama.example`
+- `All local via LM Studio`: `.env.lmstudio.example`
+- `Mixed/custom`: `.env.example`
 
 ## 🌐 Live Demo
 
@@ -120,7 +127,7 @@ For this Graphiti + Neo4j implementation, the recommended path is:
 
 1. Follow [`SETUP.md`](./SETUP.md) from top to bottom
 2. Start Neo4j locally first
-3. Add both your OpenAI key and your Anthropic key to `.env`
+3. Copy the env template that matches your provider setup
 4. Install dependencies
 5. Start the app with `npm run dev`
 
@@ -130,7 +137,7 @@ From the project root:
 
 ```bash
 # 1. Copy the environment file
-cp .env.example .env
+cp .env.openai.example .env
 
 # 2. Install root + frontend + backend dependencies
 npm run setup:all
@@ -149,14 +156,15 @@ npm run dev
 Before starting the app, make sure you have all of these ready:
 
 - local Neo4j running on `bolt://localhost:7687`
-- an OpenAI API key
-- an Anthropic API key
+- the API keys required by the providers you chose in `.env`
+- Ollama or LM Studio running if you selected local vector providers
 - a completed `.env` file
 
 Recommended models:
 
-- `LLM_MODEL_NAME=gpt-4o-mini`
+- `LLM_MODEL_NAME=gpt-5.4-mini`
 - `ANTHROPIC_MODEL_NAME=claude-sonnet-4-6`
+- `GRAPHITI_EMBEDDER_MODEL=nomic-embed-text` for Ollama
 - `MIROFISH_SEARCH_PROVIDER=anthropic`
 - `MIROFISH_SEARCH_MODEL=claude-sonnet-4-6`
 
@@ -181,6 +189,8 @@ This implementation no longer uses Zep Cloud for the graph-building pipeline.
 
 - `ZEP_API_KEY` is not required for local Graphiti graph building
 - local Neo4j is now required instead
+- local vector providers are `ollama` and `lmstudio`
+- built-in web search still expects real OpenAI or Anthropic APIs
 
 ## License
 
@@ -201,6 +211,12 @@ Practical AGPL distribution and deployment notes for this repository are documen
 - [`AGPL-COMPLIANCE.md`](./AGPL-COMPLIANCE.md)
 
 If you run this modified version for users over a network, the AGPL requires you to make the corresponding source code of the running version available to those users.
+
+## Contact
+
+For private questions, collaboration, or licensing-related contact:
+
+- `th0mg0y@proton.me`
 
 ## 📬 More Community
 

@@ -66,6 +66,14 @@ class SearchService:
             WebSearchResult with answer and citations
         """
         logger.info(f"Web search: {query[:80]}...")
+        if not self.provider.supports_web_search():
+            message = (
+                "The configured search provider does not support built-in web search. "
+                "Use Anthropic or the real OpenAI API for search."
+            )
+            logger.warning(message)
+            return WebSearchResult(query=query, answer=message, citations=[])
+
         result = self.provider.web_search(query=query, context=context)
 
         # Log the search

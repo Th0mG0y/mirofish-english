@@ -13,14 +13,15 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from graphiti_core import Graphiti
-from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
-from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
-from graphiti_core.llm_client.anthropic_client import AnthropicClient as GraphitiAnthropicClient
-from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.nodes import EpisodeType
 
 from ..config import Config
 from ..models.task import TaskManager, TaskStatus
+from ..utils.graphiti_clients import (
+    create_graphiti_embedder,
+    create_graphiti_llm_client,
+    create_graphiti_reranker,
+)
 from ..utils.zep_paging import (
     delete_graph_group,
     fetch_all_edges,
@@ -221,30 +222,9 @@ class GraphBuilderService:
     def _create_graphiti(self) -> Graphiti:
         if not Config.NEO4J_URI or not Config.NEO4J_USER or not Config.NEO4J_PASSWORD:
             raise ValueError("NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD must be configured for Graphiti")
-        if not Config.ANTHROPIC_API_KEY:
-            raise ValueError("ANTHROPIC_API_KEY is not configured for Graphiti entity extraction")
-        if not Config.LLM_API_KEY:
-            raise ValueError("LLM_API_KEY is not configured for Graphiti embeddings")
-
-        llm_client = GraphitiAnthropicClient(
-            config=LLMConfig(
-                api_key=Config.ANTHROPIC_API_KEY,
-                model=Config.ANTHROPIC_MODEL_NAME,
-            )
-        )
-        embedder = OpenAIEmbedder(
-            config=OpenAIEmbedderConfig(
-                api_key=Config.LLM_API_KEY,
-                base_url=Config.LLM_BASE_URL,
-            )
-        )
-        reranker = OpenAIRerankerClient(
-            config=LLMConfig(
-                api_key=Config.LLM_API_KEY,
-                base_url=Config.LLM_BASE_URL,
-                model=Config.LLM_MODEL_NAME,
-            )
-        )
+        llm_client = create_graphiti_llm_client()
+        embedder = create_graphiti_embedder()
+        reranker = create_graphiti_reranker(embedder)
 
         return Graphiti(
             uri=Config.NEO4J_URI,

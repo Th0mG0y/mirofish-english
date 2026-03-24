@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 
 from ..config import Config
+from .openai_compatible import is_local_base_url, resolve_openai_compatible_api_key
 from ..utils.logger import get_logger
 
 logger = get_logger('mirofish.llm_provider')
@@ -79,12 +80,14 @@ class OpenAIProvider(LLMProvider):
     ):
         from openai import OpenAI
 
-        self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
-
-        if not self.api_key:
-            raise ValueError("OpenAI API key is not configured")
+        self.api_key = resolve_openai_compatible_api_key(
+            api_key=api_key,
+            base_url=self.base_url,
+            provider_name='openai',
+            fallback=Config.LLM_API_KEY,
+        )
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         logger.info(f"OpenAIProvider initialized: model={self.model}")
@@ -122,7 +125,7 @@ class OpenAIProvider(LLMProvider):
         return ProviderResponse(content=content, model=self.model, usage=usage)
 
     def supports_web_search(self) -> bool:
-        return True
+        return not is_local_base_url(self.base_url)
 
     def web_search(
         self,
@@ -131,6 +134,13 @@ class OpenAIProvider(LLMProvider):
         user_location: Optional[Dict] = None
     ) -> WebSearchResult:
         """Use OpenAI's responses API with web_search tool"""
+        if is_local_base_url(self.base_url):
+            return WebSearchResult(
+                query=query,
+                answer="Built-in web search is unavailable for local OpenAI-compatible servers. Use Anthropic or the real OpenAI API for search.",
+                citations=[],
+            )
+
         try:
             messages = []
             if context:
@@ -300,6 +310,34 @@ class ProviderFactory:
     }
 
     @classmethod
+    def _build_provider_kwargs(
+        cls,
+        provider_name: str,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_name = provider_name.lower()
+        kwargs: Dict[str, Any] = {}
+
+        if model:
+            kwargs["model"] = model
+
+        if normalized_name == "openai":
+            if api_key is not None:
+                kwargs["api_key"] = api_key
+            if base_url is not None:
+                kwargs["base_url"] = base_url
+            return kwargs
+
+        if normalized_name == "anthropic":
+            if api_key is not None:
+                kwargs["api_key"] = api_key
+            return kwargs
+
+        raise ValueError(f"Unknown provider: {provider_name}. Available: {list(cls._providers.keys())}")
+
+    @classmethod
     def create(cls, provider_name: str, **kwargs) -> LLMProvider:
         """Create a provider by name"""
         provider_class = cls._providers.get(provider_name.lower())
@@ -315,14 +353,35 @@ class ProviderFactory:
         return cls.create(provider_name)
 
     @classmethod
+    def create_main_provider(
+        cls,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> LLMProvider:
+        provider_name = Config.LLM_PROVIDER
+        kwargs = cls._build_provider_kwargs(
+            provider_name,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        )
+        logger.info(
+            f"Creating main LLM provider: {provider_name}"
+            + (f" model={kwargs['model']}" if "model" in kwargs else "")
+        )
+        return cls.create(provider_name, **kwargs)
+
+    @classmethod
     def create_search_provider(cls) -> LLMProvider:
         """Create the search provider (may differ from main provider)"""
         provider_name = Config.SEARCH_PROVIDER
         search_model = Config.SEARCH_MODEL
 
-        kwargs = {}
-        if search_model:
-            kwargs["model"] = search_model
+        kwargs = cls._build_provider_kwargs(
+            provider_name,
+            model=search_model or None,
+        )
 
         logger.info(f"Creating search provider: {provider_name}" + (f" model={search_model}" if search_model else ""))
         return cls.create(provider_name, **kwargs)
