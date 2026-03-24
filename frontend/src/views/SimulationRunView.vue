@@ -269,30 +269,16 @@ const refreshGraph = () => {
 }
 
 // --- Auto Refresh Logic ---
-let graphRefreshTimer = null
-
-const startGraphRefresh = () => {
-  if (graphRefreshTimer) return
-  addLog('Starting graph real-time refresh (30s interval)')
-  // Refresh immediately, then every 30 seconds
-  graphRefreshTimer = setInterval(refreshGraph, 30000)
-}
-
-const stopGraphRefresh = () => {
-  if (graphRefreshTimer) {
-    clearInterval(graphRefreshTimer)
-    graphRefreshTimer = null
-    addLog('Stopping graph real-time refresh')
+// Graph polling during simulation is disabled to avoid hammering Neo4j
+// and choking the graph visualization as the graph grows.
+// The graph is refreshed once when the simulation completes.
+watch(isSimulating, (newValue, oldValue) => {
+  if (oldValue && !newValue) {
+    // Simulation just finished - refresh graph once
+    addLog('Simulation ended, refreshing graph data')
+    refreshGraph()
   }
-}
-
-watch(isSimulating, (newValue) => {
-  if (newValue) {
-    startGraphRefresh()
-  } else {
-    stopGraphRefresh()
-  }
-}, { immediate: true })
+})
 
 onMounted(() => {
   addLog('SimulationRunView initialized')
@@ -306,7 +292,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  stopGraphRefresh()
+  // No cleanup needed - graph polling is disabled during simulation
 })
 </script>
 

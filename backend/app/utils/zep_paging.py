@@ -155,7 +155,7 @@ def _build_edge(record: dict[str, Any]) -> Neo4jEntityEdge:
         valid_at=record.get("valid_at"),
         invalid_at=record.get("invalid_at"),
         expired_at=record.get("expired_at"),
-        episodes=_coerce_list(record.get("episodes"), fallback=record.get("episode_ids")),
+        episodes=_coerce_list(record.get("episodes")),
     )
 
 
@@ -172,7 +172,6 @@ async def fetch_all_nodes_async(graph_id: str) -> list[Neo4jEntityNode]:
                     labels(n) AS neo4j_labels,
                     n.labels AS stored_labels,
                     n.summary AS summary,
-                    n.attributes AS attributes,
                     n.created_at AS created_at
                 """,
                 gid=graph_id,
@@ -205,13 +204,11 @@ async def fetch_all_edges_async(graph_id: str) -> list[Neo4jEntityEdge]:
                     target.uuid AS target_uuid_fallback,
                     source.name AS source_node_name,
                     target.name AS target_node_name,
-                    r.attributes AS attributes,
                     r.created_at AS created_at,
                     r.valid_at AS valid_at,
                     r.invalid_at AS invalid_at,
                     r.expired_at AS expired_at,
-                    r.episodes AS episodes,
-                    r.episode_ids AS episode_ids
+                    r.episodes AS episodes
                 """,
                 gid=graph_id,
             )
