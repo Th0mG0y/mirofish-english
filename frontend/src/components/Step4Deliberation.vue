@@ -747,6 +747,40 @@ onMounted(() => {
 .nav-btn.primary:hover:not(:disabled) { background: #1565C0; }
 .nav-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Navigation */
+.navigation-section {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 0;
+  border-top: 1px solid #EAEAEA;
+  margin-top: 8px;
+}
+
+.nav-btn {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nav-btn.secondary {
+  background: #FFF;
+  border: 1px solid #DDD;
+  color: #555;
+}
+.nav-btn.secondary:hover { background: #F5F5F5; border-color: #BBB; }
+
+.nav-btn.primary {
+  background: #1976D2;
+  border: 1px solid #1565C0;
+  color: #FFF;
+}
+.nav-btn.primary:hover:not(:disabled) { background: #1565C0; }
+.nav-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Empty / Loading */
 .empty-state, .loading-state {
   text-align: center;
