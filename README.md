@@ -2,7 +2,6 @@
 
 <img src="./static/image/MiroFish_logo_compressed.jpeg" alt="MiroFish Logo" width="75%"/>
 
-A Simple and Universal Swarm Intelligence Engine, Predicting Anything
 </br>
 <em>A Simple and Universal Swarm Intelligence Engine, Predicting Anything</em>
 
