@@ -305,12 +305,147 @@ class AnthropicProvider(LLMProvider):
             return WebSearchResult(query=query, answer=f"Search failed: {str(e)}", citations=[])
 
 
+class OllamaProvider(LLMProvider):
+    """Ollama LLM provider — local inference via OpenAI-compatible API, optional cloud web search"""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        search_api_key: Optional[str] = None,
+    ):
+        from openai import OpenAI
+
+        self.base_url = base_url or Config.OLLAMA_BASE_URL
+        self.model = model or Config.OLLAMA_MODEL_NAME or Config.LLM_MODEL_NAME
+        self.api_key = resolve_openai_compatible_api_key(
+            api_key=api_key,
+            base_url=self.base_url,
+            provider_name='ollama',
+        )
+        self.search_api_key = search_api_key or Config.OLLAMA_API_KEY
+
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        logger.info(f"OllamaProvider initialized: model={self.model}, base_url={self.base_url}")
+
+    def chat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: Optional[List[Dict]] = None,
+        response_format: Optional[Dict] = None
+    ) -> ProviderResponse:
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        # Try native JSON mode first; inject prompt instruction as fallback
+        if response_format and response_format.get("type") == "json_object":
+            try:
+                kwargs["response_format"] = response_format
+                response = self.client.chat.completions.create(**kwargs)
+            except Exception:
+                # Model may not support response_format — fall back to prompt injection
+                del kwargs["response_format"]
+                json_instruction = "You must respond with valid JSON only. Do not include any text, explanation, or markdown formatting outside the JSON object."
+                patched = False
+                for msg in kwargs["messages"]:
+                    if msg["role"] == "system":
+                        msg["content"] += f"\n\n{json_instruction}"
+                        patched = True
+                        break
+                if not patched:
+                    kwargs["messages"] = [{"role": "system", "content": json_instruction}] + kwargs["messages"]
+                response = self.client.chat.completions.create(**kwargs)
+        else:
+            if response_format:
+                kwargs["response_format"] = response_format
+            response = self.client.chat.completions.create(**kwargs)
+
+        content = response.choices[0].message.content or ""
+        # Strip <think> tags from reasoning models (e.g. qwen3)
+        content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
+
+        usage = None
+        if response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+
+        return ProviderResponse(content=content, model=self.model, usage=usage)
+
+    def supports_web_search(self) -> bool:
+        return bool(self.search_api_key)
+
+    def web_search(
+        self,
+        query: str,
+        context: str = "",
+        user_location: Optional[Dict] = None
+    ) -> WebSearchResult:
+        """Use Ollama's cloud web search API (requires OLLAMA_API_KEY)"""
+        if not self.search_api_key:
+            return WebSearchResult(
+                query=query,
+                answer="OLLAMA_API_KEY not configured. Set it in .env to enable Ollama cloud web search (free with an Ollama account).",
+                citations=[],
+            )
+
+        import urllib.request
+        import urllib.error
+
+        try:
+            payload = json.dumps({"query": query}).encode("utf-8")
+            req = urllib.request.Request(
+                "https://ollama.com/api/web_search",
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.search_api_key}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            citations = []
+            for result in data.get("results", []):
+                citations.append(Citation(
+                    url=result.get("url", ""),
+                    title=result.get("title", ""),
+                    snippet=result.get("snippet", result.get("content", "")),
+                ))
+
+            answer = data.get("answer", "")
+            if not answer and citations:
+                answer = "\n\n".join(
+                    f"**{c.title}**: {c.snippet}" for c in citations if c.snippet
+                )
+
+            return WebSearchResult(query=query, answer=answer, citations=citations)
+
+        except urllib.error.HTTPError as e:
+            logger.warning(f"Ollama web search HTTP error {e.code}: {e.reason}")
+            return WebSearchResult(query=query, answer=f"Ollama web search failed (HTTP {e.code}): {e.reason}", citations=[])
+        except Exception as e:
+            logger.warning(f"Ollama web search failed: {e}")
+            return WebSearchResult(query=query, answer=f"Ollama web search failed: {str(e)}", citations=[])
+
+
 class ProviderFactory:
     """Factory for creating LLM providers"""
 
     _providers = {
         "openai": OpenAIProvider,
         "anthropic": AnthropicProvider,
+        "ollama": OllamaProvider,
     }
 
     @classmethod
@@ -337,6 +472,13 @@ class ProviderFactory:
         if normalized_name == "anthropic":
             if api_key is not None:
                 kwargs["api_key"] = api_key
+            return kwargs
+
+        if normalized_name == "ollama":
+            if api_key is not None:
+                kwargs["api_key"] = api_key
+            if base_url is not None:
+                kwargs["base_url"] = base_url
             return kwargs
 
         raise ValueError(f"Unknown provider: {provider_name}. Available: {list(cls._providers.keys())}")
