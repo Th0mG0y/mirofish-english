@@ -313,6 +313,7 @@ const closeDetailPanel = () => {
 let currentSimulation = null
 let linkLabelsRef = null
 let linkLabelBgRef = null
+let currentTransform = null // Preserve zoom/pan state across re-renders
 
 const renderGraph = () => {
   if (!graphSvg.value || !props.graphData) return
@@ -476,11 +477,18 @@ const renderGraph = () => {
   currentSimulation = simulation
 
   const g = svg.append('g')
-  
-  // Zoom
-  svg.call(d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on('zoom', (event) => {
+
+  // Zoom – preserve transform across re-renders
+  const zoomBehavior = d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on('zoom', (event) => {
+    currentTransform = event.transform
     g.attr('transform', event.transform)
-  }))
+  })
+  svg.call(zoomBehavior)
+
+  // Restore previous zoom/pan state if it exists
+  if (currentTransform) {
+    svg.call(zoomBehavior.transform, currentTransform)
+  }
 
   // Links – use path to support curves
   const linkGroup = g.append('g').attr('class', 'links')

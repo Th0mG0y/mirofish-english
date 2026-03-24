@@ -49,7 +49,8 @@
             <span class="step-title">Generate Agent Personas</span>
           </div>
           <div class="step-status">
-            <span v-if="phase > 1" class="badge success">Completed</span>
+            <span v-if="prepareError" class="badge error">Failed</span>
+            <span v-else-if="phase > 1" class="badge success">Completed</span>
             <span v-else-if="phase === 1" class="badge processing">{{ prepareProgress }}%</span>
             <span v-else class="badge pending">Waiting</span>
           </div>
@@ -60,6 +61,13 @@
           <p class="description">
             Using context, automatically calls tools to organise entities and relationships from the knowledge graph, initialises simulation individuals, and grants them unique behaviours and memories based on reality seeds
           </p>
+
+          <!-- Error message -->
+          <div v-if="prepareError" class="error-card">
+            <p class="error-title">Preparation Failed</p>
+            <p class="error-message">{{ prepareError }}</p>
+            <p class="error-hint">Ensure Neo4j is running and the knowledge graph has been built in Step 1, then reload the page to retry.</p>
+          </div>
 
           <!-- Profiles Stats -->
           <div v-if="profiles.length > 0" class="stats-grid">
@@ -526,6 +534,27 @@
           </div>
         </div>
       </div>
+    <!-- Bottom Info / Logs -->
+    <div class="system-logs">
+      <div class="log-header">
+        <div class="log-header-left">
+          <span class="log-dot" :class="{ 'log-dot-active': phase < 4 }"></span>
+          <span class="log-title">SYSTEM DASHBOARD</span>
+        </div>
+        <div class="log-header-right">
+          <span class="log-count">{{ systemLogs.length }} events</span>
+          <span class="log-id">{{ simulationId || 'NO_SIMULATION' }}</span>
+        </div>
+      </div>
+      <div class="log-content" ref="logContent">
+        <div class="log-line" v-for="(log, idx) in systemLogs" :key="idx">
+          <span class="log-time">{{ log.time }}</span>
+          <span class="log-prefix">▸</span>
+          <span class="log-msg" :class="getLogClass(log.msg)">{{ log.msg }}</span>
+        </div>
+        <div v-if="!systemLogs.length" class="log-empty">Waiting for events...</div>
+      </div>
+    </div>
     </div>
 
     <!-- Profile Detail Modal -->
@@ -615,19 +644,6 @@
       </div>
     </Transition>
 
-    <!-- Bottom Info / Logs -->
-    <div class="system-logs">
-      <div class="log-header">
-        <span class="log-title">SYSTEM DASHBOARD</span>
-        <span class="log-id">{{ simulationId || 'NO_SIMULATION' }}</span>
-      </div>
-      <div class="log-content" ref="logContent">
-        <div class="log-line" v-for="(log, idx) in systemLogs" :key="idx">
-          <span class="log-time">{{ log.time }}</span>
-          <span class="log-msg">{{ log.msg }}</span>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -662,6 +678,7 @@ const expectedTotal = ref(null)
 const simulationConfig = ref(null)
 const selectedProfile = ref(null)
 const showProfilesDetail = ref(true)
+const prepareError = ref(null)
 
 // Log deduplication: record key information from the last output
 let lastLoggedMessage = ''
@@ -800,10 +817,13 @@ const startPrepareSimulation = async () => {
       // Immediately set expected total agent count (from prepare API response)
       if (res.data.expected_entities_count) {
         expectedTotal.value = res.data.expected_entities_count
-        addLog(`Read ${res.data.expected_entities_count} entities from Zep graph`)
+        addLog(`Read ${res.data.expected_entities_count} entities from graph database`)
         if (res.data.entity_types && res.data.entity_types.length > 0) {
           addLog(`  └─ Entity types: ${res.data.entity_types.join(', ')}`)
         }
+      } else {
+        addLog('⚠ 0 entities found in graph — preparation will likely fail')
+        addLog('  └─ Ensure Neo4j is running and the graph was built in Step 1')
       }
 
       addLog('Starting to poll preparation progress...')
@@ -895,9 +915,13 @@ const pollPrepareStatus = async () => {
         stopProfilesPolling()
         await loadPreparedData()
       } else if (data.status === 'failed') {
-        addLog(`✗ Preparation failed: ${data.error || 'Unknown error'}`)
+        const errorMsg = data.error || 'Unknown error'
+        addLog(`✗ Preparation failed: ${errorMsg}`)
+        addLog('Make sure Neo4j is running and the graph has been built in Step 1.')
+        prepareError.value = errorMsg
         stopPolling()
         stopProfilesPolling()
+        emit('update-status', 'error')
       }
     }
   } catch (err) {
@@ -1055,6 +1079,15 @@ const loadPreparedData = async () => {
   }
 }
 
+const getLogClass = (msg) => {
+  const lower = msg.toLowerCase()
+  if (/error|exception|failed|fail|invalid/.test(lower)) return 'log-msg-error'
+  if (/complete|completed|success|done|built|generated/.test(lower)) return 'log-msg-success'
+  if (/starting|uploading|generating|building|processing|analysing|analyzing|waiting/.test(lower)) return 'log-msg-info'
+  if (/warn|skip|missing/.test(lower)) return 'log-msg-warn'
+  return ''
+}
+
 // Scroll log to bottom
 const logContent = ref(null)
 watch(() => props.systemLogs?.length, () => {
@@ -1156,6 +1189,7 @@ onUnmounted(() => {
 .badge.success { background: #E8F5E9; color: #2E7D32; }
 .badge.processing { background: #FF5722; color: #FFF; }
 .badge.pending { background: #F5F5F5; color: #999; }
+.badge.error { background: #FFEBEE; color: #C62828; }
 .badge.accent { background: #E3F2FD; color: #1565C0; }
 
 .card-content {
@@ -1233,6 +1267,31 @@ onUnmounted(() => {
 }
 
 /* Info Card */
+.error-card {
+  background: #FFF5F5;
+  border: 1px solid #FFCDD2;
+  border-radius: 6px;
+  padding: 16px;
+  margin-top: 16px;
+}
+.error-title {
+  font-weight: 600;
+  color: #C62828;
+  margin: 0 0 8px 0;
+  font-size: 14px;
+}
+.error-message {
+  color: #D32F2F;
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.error-hint {
+  color: #666;
+  margin: 0;
+  font-size: 12px;
+}
+
 .info-card {
   background: #F5F5F5;
   border-radius: 6px;
@@ -2050,57 +2109,117 @@ onUnmounted(() => {
 
 /* System Logs */
 .system-logs {
-  background: #000;
-  color: #DDD;
-  padding: 16px;
+  background: #0D1117;
+  padding: 12px 16px;
   font-family: 'JetBrains Mono', monospace;
-  border-top: 1px solid #222;
-  flex-shrink: 0;
+  border-radius: 8px;
+  margin: 0 16px 16px;
 }
 
 .log-header {
   display: flex;
   justify-content: space-between;
-  border-bottom: 1px solid #333;
+  align-items: center;
+  border-bottom: 1px solid #21262D;
   padding-bottom: 8px;
   margin-bottom: 8px;
+}
+
+.log-header-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.log-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.log-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #30363D;
+  flex-shrink: 0;
+}
+
+.log-dot.log-dot-active {
+  background: #3FB950;
+  box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.25);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.25); }
+  50% { box-shadow: 0 0 0 4px rgba(63, 185, 80, 0.1); }
+}
+
+.log-title {
   font-size: 10px;
-  color: #888;
+  font-weight: 600;
+  color: #8B949E;
+  letter-spacing: 0.08em;
+}
+
+.log-count {
+  font-size: 10px;
+  color: #30363D;
+}
+
+.log-id {
+  font-size: 10px;
+  color: #484F58;
 }
 
 .log-content {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  height: 80px; /* Approx 4 lines visible */
+  gap: 2px;
+  height: 130px;
   overflow-y: auto;
   padding-right: 4px;
 }
 
-.log-content::-webkit-scrollbar {
-  width: 4px;
-}
-
-.log-content::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 2px;
-}
+.log-content::-webkit-scrollbar { width: 3px; }
+.log-content::-webkit-scrollbar-track { background: transparent; }
+.log-content::-webkit-scrollbar-thumb { background: #30363D; border-radius: 2px; }
 
 .log-line {
   font-size: 11px;
   display: flex;
-  gap: 12px;
-  line-height: 1.5;
+  gap: 8px;
+  line-height: 1.6;
+  align-items: baseline;
 }
 
 .log-time {
-  color: #666;
+  color: #484F58;
   min-width: 75px;
+  flex-shrink: 0;
+}
+
+.log-prefix {
+  color: #30363D;
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .log-msg {
-  color: #CCC;
+  color: #8B949E;
   word-break: break-all;
+}
+
+.log-msg-error  { color: #F85149; }
+.log-msg-success { color: #3FB950; }
+.log-msg-info   { color: #58A6FF; }
+.log-msg-warn   { color: #D29922; }
+
+.log-empty {
+  font-size: 11px;
+  color: #30363D;
+  font-style: italic;
 }
 
 /* Spinner */

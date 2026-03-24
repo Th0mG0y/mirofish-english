@@ -116,7 +116,7 @@ class SimulationManager:
     Simulation manager
 
     Core functions:
-    1. Read and filter entities from Zep graph
+    1. Read and filter entities from graph database
     2. Generate OASIS Agent Profile
     3. Use LLM to intelligently generate simulation configuration parameters
     4. Prepare all files required by preset scripts
@@ -202,7 +202,7 @@ class SimulationManager:
 
         Args:
             project_id: Project ID
-            graph_id: Zep graph ID
+            graph_id: Graph database ID
             enable_twitter: Whether to enable Twitter simulation
             enable_reddit: Whether to enable Reddit simulation
 
@@ -240,7 +240,7 @@ class SimulationManager:
         Prepare simulation environment (fully automated)
 
         Steps:
-        1. Read and filter entities from Zep graph
+        1. Read and filter entities from graph database
         2. Generate OASIS Agent Profile for each entity (optional LLM enhancement, parallel supported)
         3. Use LLM to intelligently generate simulation configuration parameters (time, activity level, posting frequency, etc.)
         4. Save configuration files and profile files
@@ -270,18 +270,27 @@ class SimulationManager:
             
             # ========== Stage 1: Read and filter entities ==========
             if progress_callback:
-                progress_callback("reading", 0, "Connecting to Zep graph...")
+                progress_callback("reading", 0, "Connecting to graph database...")
             
             reader = ZepEntityReader()
-            
+
             if progress_callback:
                 progress_callback("reading", 30, "Reading node data...")
-            
-            filtered = reader.filter_defined_entities(
-                graph_id=state.graph_id,
-                defined_entity_types=defined_entity_types,
-                enrich_with_edges=True
-            )
+
+            try:
+                filtered = reader.filter_defined_entities(
+                    graph_id=state.graph_id,
+                    defined_entity_types=defined_entity_types,
+                    enrich_with_edges=True
+                )
+            except Exception as e:
+                error_msg = str(e)
+                if "Connection" in error_msg or "refused" in error_msg or "ServiceUnavailable" in error_msg:
+                    raise ConnectionError(
+                        f"Cannot connect to Neo4j at {Config.NEO4J_URI}. "
+                        f"Make sure Neo4j is running (docker compose up neo4j). Original error: {error_msg}"
+                    )
+                raise
             
             state.entities_count = filtered.filtered_count
             state.entity_types = list(filtered.entity_types)
@@ -311,7 +320,7 @@ class SimulationManager:
                     total=total_entities
                 )
             
-            # Pass graph_id to enable Zep retrieval for richer context
+            # Pass graph_id to enable graph retrieval for richer context
             generator = OasisProfileGenerator(graph_id=state.graph_id)
             
             def profile_progress(current, total, msg):
@@ -339,7 +348,7 @@ class SimulationManager:
                 entities=filtered.entities,
                 use_llm=use_llm_for_profiles,
                 progress_callback=profile_progress,
-                graph_id=state.graph_id,  # Pass graph_id for Zep retrieval
+                graph_id=state.graph_id,  # Pass graph_id for graph retrieval
                 parallel_count=parallel_profile_count,  # Parallel generation count
                 realtime_output_path=realtime_output_path,  # Real-time save path
                 output_platform=realtime_platform  # Output format

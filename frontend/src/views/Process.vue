@@ -715,6 +715,7 @@ const startBuildGraph = async () => {
 
 // Graph data polling timer
 let graphPollTimer = null
+let currentGraphTransform = null // Preserve zoom/pan state across re-renders
 
 // Start graph data polling
 const startGraphPolling = () => {
@@ -964,12 +965,19 @@ const renderGraph = () => {
   // Add zoom functionality
   const g = svg.append('g')
   
-  svg.call(d3.zoom()
+  const zoomBehavior = d3.zoom()
     .extent([[0, 0], [width, height]])
     .scaleExtent([0.2, 4])
     .on('zoom', (event) => {
+      currentGraphTransform = event.transform
       g.attr('transform', event.transform)
-    }))
+    })
+  svg.call(zoomBehavior)
+
+  // Restore previous zoom/pan state if it exists
+  if (currentGraphTransform) {
+    svg.call(zoomBehavior.transform, currentGraphTransform)
+  }
   
   // Draw edges (including clickable transparent wide lines)
   const linkGroup = g.append('g')

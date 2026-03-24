@@ -1,18 +1,16 @@
 """
-Zep graph memory update service
-Dynamically updates agent activities from the simulation into the Zep graph
+Graph memory update service
+Dynamically updates agent activities from the simulation into the graph database
+via Graphiti + Neo4j.
 """
 
-import os
+import asyncio
 import time
 import threading
-import json
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 from queue import Queue, Empty
-
-from zep_cloud.client import Zep
 
 from ..config import Config
 from ..utils.logger import get_logger
@@ -33,9 +31,9 @@ class AgentActivity:
 
     def to_episode_text(self) -> str:
         """
-        Convert the activity to a text description suitable for sending to Zep
+        Convert the activity to a text description suitable for graph ingestion.
 
-        Uses a natural-language description format so Zep can extract entities and relationships.
+        Uses a natural-language description format so the LLM can extract entities and relationships.
         No simulation-related prefix is added to avoid misleading the graph update.
         """
         # Generate a description based on the action type
@@ -198,15 +196,41 @@ class AgentActivity:
         return f"performed action: {self.action_type}"
 
 
+def _create_graphiti():
+    """Create a Graphiti client for graph memory updates."""
+    from graphiti_core import Graphiti
+    from ..utils.graphiti_clients import (
+        create_graphiti_llm_client,
+        create_graphiti_embedder,
+        create_graphiti_reranker,
+    )
+
+    if not Config.NEO4J_URI or not Config.NEO4J_USER or not Config.NEO4J_PASSWORD:
+        raise ValueError("NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD must be configured")
+
+    llm_client = create_graphiti_llm_client()
+    embedder = create_graphiti_embedder()
+    reranker = create_graphiti_reranker(embedder)
+
+    return Graphiti(
+        uri=Config.NEO4J_URI,
+        user=Config.NEO4J_USER,
+        password=Config.NEO4J_PASSWORD,
+        llm_client=llm_client,
+        embedder=embedder,
+        cross_encoder=reranker,
+    )
+
+
 class ZepGraphMemoryUpdater:
     """
-    Zep graph memory updater
+    Graph memory updater
 
     Monitors the simulation's actions log file and dynamically updates new agent
-    activities to the Zep graph in real time.
+    activities to the graph database in real time via Graphiti.
     Activities are grouped by platform and sent in batches once BATCH_SIZE activities accumulate.
 
-    All meaningful actions are updated to Zep; action_args contains full context:
+    All meaningful actions are updated to the graph; action_args contains full context:
     - Original text of liked/disliked posts
     - Original text of reposted/quoted posts
     - Names of followed/muted users
@@ -229,21 +253,14 @@ class ZepGraphMemoryUpdater:
     MAX_RETRIES = 3
     RETRY_DELAY = 2  # seconds
 
-    def __init__(self, graph_id: str, api_key: Optional[str] = None):
+    def __init__(self, graph_id: str):
         """
         Initialize the updater
 
         Args:
-            graph_id: Zep graph ID
-            api_key: Zep API key (optional, read from config by default)
+            graph_id: Graph ID (group_id in Neo4j)
         """
         self.graph_id = graph_id
-        self.api_key = api_key or Config.ZEP_API_KEY
-
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY is not configured")
-
-        self.client = Zep(api_key=self.api_key)
 
         # Activity queue
         self._activity_queue: Queue = Queue()
@@ -259,14 +276,18 @@ class ZepGraphMemoryUpdater:
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
 
+        # Async event loop for the worker thread (created on start)
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._graphiti = None
+
         # Statistics
         self._total_activities = 0  # Total activities added to the queue
-        self._total_sent = 0        # Successfully sent batches to Zep
-        self._total_items_sent = 0  # Successfully sent activity items to Zep
+        self._total_sent = 0        # Successfully sent batches
+        self._total_items_sent = 0  # Successfully sent activity items
         self._failed_count = 0      # Failed batches
         self._skipped_count = 0     # Filtered/skipped activities (DO_NOTHING)
 
-        logger.info(f"ZepGraphMemoryUpdater initialized: graph_id={graph_id}, batch_size={self.BATCH_SIZE}")
+        logger.info(f"GraphMemoryUpdater initialized: graph_id={graph_id}, batch_size={self.BATCH_SIZE}")
 
     def _get_platform_display_name(self, platform: str) -> str:
         """Get the display name for a platform"""
@@ -281,10 +302,10 @@ class ZepGraphMemoryUpdater:
         self._worker_thread = threading.Thread(
             target=self._worker_loop,
             daemon=True,
-            name=f"ZepMemoryUpdater-{self.graph_id[:8]}"
+            name=f"GraphMemoryUpdater-{self.graph_id[:8]}"
         )
         self._worker_thread.start()
-        logger.info(f"ZepGraphMemoryUpdater started: graph_id={self.graph_id}")
+        logger.info(f"GraphMemoryUpdater started: graph_id={self.graph_id}")
 
     def stop(self):
         """Stop the background worker thread"""
@@ -296,7 +317,14 @@ class ZepGraphMemoryUpdater:
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=10)
 
-        logger.info(f"ZepGraphMemoryUpdater stopped: graph_id={self.graph_id}, "
+        # Close the Graphiti client if it was created
+        if self._graphiti and self._loop:
+            try:
+                self._loop.run_until_complete(self._graphiti.close())
+            except Exception:
+                pass
+
+        logger.info(f"GraphMemoryUpdater stopped: graph_id={self.graph_id}, "
                     f"total_activities={self._total_activities}, "
                     f"batches_sent={self._total_sent}, "
                     f"items_sent={self._total_items_sent}, "
@@ -331,7 +359,7 @@ class ZepGraphMemoryUpdater:
 
         self._activity_queue.put(activity)
         self._total_activities += 1
-        logger.debug(f"Activity added to Zep queue: {activity.agent_name} - {activity.action_type}")
+        logger.debug(f"Activity added to graph queue: {activity.agent_name} - {activity.action_type}")
 
     def add_activity_from_dict(self, data: Dict[str, Any], platform: str):
         """
@@ -358,7 +386,20 @@ class ZepGraphMemoryUpdater:
         self.add_activity(activity)
 
     def _worker_loop(self):
-        """Background worker loop - sends activities to Zep in batches per platform"""
+        """Background worker loop - sends activities to graph in batches per platform"""
+        # Create a dedicated event loop for this thread
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+
+        # Initialize Graphiti client
+        try:
+            self._graphiti = _create_graphiti()
+            self._loop.run_until_complete(self._graphiti.build_indices_and_constraints())
+        except Exception as e:
+            logger.error(f"Failed to initialize Graphiti client: {e}")
+            self._running = False
+            return
+
         while self._running or not self._activity_queue.empty():
             try:
                 # Try to get an activity from the queue (1 second timeout)
@@ -388,16 +429,26 @@ class ZepGraphMemoryUpdater:
                 logger.error(f"Worker loop error: {e}")
                 time.sleep(1)
 
+        # Clean up event loop
+        try:
+            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        asyncio.set_event_loop(None)
+        self._loop.close()
+
     def _send_batch_activities(self, activities: List[AgentActivity], platform: str):
         """
-        Send a batch of activities to the Zep graph (merged into a single text block)
+        Send a batch of activities to the graph via Graphiti add_episode
 
         Args:
             activities: List of agent activities
             platform: Platform name
         """
-        if not activities:
+        if not activities or not self._graphiti or not self._loop:
             return
+
+        from graphiti_core.nodes import EpisodeType
 
         # Merge multiple activities into a single text block separated by newlines
         episode_texts = [activity.to_episode_text() for activity in activities]
@@ -406,10 +457,15 @@ class ZepGraphMemoryUpdater:
         # Send with retry
         for attempt in range(self.MAX_RETRIES):
             try:
-                self.client.graph.add(
-                    graph_id=self.graph_id,
-                    type="text",
-                    data=combined_text
+                self._loop.run_until_complete(
+                    self._graphiti.add_episode(
+                        name=f"sim_activity_{platform}_{self._total_sent}",
+                        episode_body=combined_text,
+                        source_description=f"MiroFish simulation {platform} activities",
+                        source=EpisodeType.text,
+                        reference_time=datetime.utcnow(),
+                        group_id=self.graph_id,
+                    )
                 )
 
                 self._total_sent += 1
@@ -421,10 +477,10 @@ class ZepGraphMemoryUpdater:
 
             except Exception as e:
                 if attempt < self.MAX_RETRIES - 1:
-                    logger.warning(f"Batch send to Zep failed (attempt {attempt + 1}/{self.MAX_RETRIES}): {e}")
+                    logger.warning(f"Batch send to graph failed (attempt {attempt + 1}/{self.MAX_RETRIES}): {e}")
                     time.sleep(self.RETRY_DELAY * (attempt + 1))
                 else:
-                    logger.error(f"Batch send to Zep failed after {self.MAX_RETRIES} retries: {e}")
+                    logger.error(f"Batch send to graph failed after {self.MAX_RETRIES} retries: {e}")
                     self._failed_count += 1
 
     def _flush_remaining(self):
@@ -473,7 +529,7 @@ class ZepGraphMemoryUpdater:
 
 class ZepGraphMemoryManager:
     """
-    Manages Zep graph memory updaters for multiple simulations
+    Manages graph memory updaters for multiple simulations
 
     Each simulation can have its own updater instance
     """
@@ -488,7 +544,7 @@ class ZepGraphMemoryManager:
 
         Args:
             simulation_id: Simulation ID
-            graph_id: Zep graph ID
+            graph_id: Graph ID (group_id in Neo4j)
 
         Returns:
             ZepGraphMemoryUpdater instance

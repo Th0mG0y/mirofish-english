@@ -15,11 +15,10 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from zep_cloud.client import Zep
-
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.llm_provider import ProviderFactory
+from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
 logger = get_logger('mirofish.oasis_profile')
@@ -182,7 +181,6 @@ class OasisProfileGenerator:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
-        zep_api_key: Optional[str] = None,
         graph_id: Optional[str] = None
     ):
         self.provider_name = Config.LLM_PROVIDER
@@ -202,16 +200,8 @@ class OasisProfileGenerator:
             model_name or Config.get_provider_model(self.provider_name),
         )
         
-        # Zep client for retrieving rich context
-        self.zep_api_key = zep_api_key or Config.ZEP_API_KEY
-        self.zep_client = None
+        # Graph ID for retrieving rich context from Neo4j
         self.graph_id = graph_id
-        
-        if self.zep_api_key:
-            try:
-                self.zep_client = Zep(api_key=self.zep_api_key)
-            except Exception as e:
-                logger.warning(f"Zep client initialization failed: {e}")
     
     def generate_profile_from_entity(
         self,
@@ -287,12 +277,11 @@ class OasisProfileGenerator:
         suffix = random.randint(100, 999)
         return f"{username}_{suffix}"
     
-    def _search_zep_for_entity(self, entity: EntityNode) -> Dict[str, Any]:
+    def _search_graph_for_entity(self, entity: EntityNode) -> Dict[str, Any]:
         """
-        Use Zep graph hybrid search to retrieve rich information about an entity
+        Search local Neo4j graph for rich information about an entity
 
-        Zep has no built-in hybrid search interface; edges and nodes must be searched
-        separately and results merged. Parallel requests are used for efficiency.
+        Uses keyword matching against all edges and nodes in the graph.
 
         Args:
             entity: Entity node object
@@ -300,101 +289,40 @@ class OasisProfileGenerator:
         Returns:
             Dictionary containing facts, node_summaries, and context
         """
-        import concurrent.futures
-        
-        if not self.zep_client:
-            return {"facts": [], "node_summaries": [], "context": ""}
-        
-        entity_name = entity.name
-        
         results = {
             "facts": [],
             "node_summaries": [],
             "context": ""
         }
-        
-        # Must have graph_id to perform search
+
         if not self.graph_id:
-            logger.debug(f"Skipping Zep retrieval: graph_id not set")
+            logger.debug("Skipping graph retrieval: graph_id not set")
             return results
 
-        comprehensive_query = f"All information, activities, events, relationships and background about {entity_name}"
+        entity_name = entity.name
+        name_lower = entity_name.lower()
 
-        def search_edges():
-            """Search edges (facts/relationships) - with retry mechanism"""
-            max_retries = 3
-            last_exception = None
-            delay = 2.0
-            
-            for attempt in range(max_retries):
-                try:
-                    return self.zep_client.graph.search(
-                        query=comprehensive_query,
-                        graph_id=self.graph_id,
-                        limit=30,
-                        scope="edges",
-                        reranker="rrf"
-                    )
-                except Exception as e:
-                    last_exception = e
-                    if attempt < max_retries - 1:
-                        logger.debug(f"Zep edge search attempt {attempt + 1} failed: {str(e)[:80]}, retrying...")
-                        time.sleep(delay)
-                        delay *= 2
-                    else:
-                        logger.debug(f"Zep edge search failed after {max_retries} attempts: {e}")
-            return None
-
-        def search_nodes():
-            """Search nodes (entity summaries) - with retry mechanism"""
-            max_retries = 3
-            last_exception = None
-            delay = 2.0
-            
-            for attempt in range(max_retries):
-                try:
-                    return self.zep_client.graph.search(
-                        query=comprehensive_query,
-                        graph_id=self.graph_id,
-                        limit=20,
-                        scope="nodes",
-                        reranker="rrf"
-                    )
-                except Exception as e:
-                    last_exception = e
-                    if attempt < max_retries - 1:
-                        logger.debug(f"Zep node search attempt {attempt + 1} failed: {str(e)[:80]}, retrying...")
-                        time.sleep(delay)
-                        delay *= 2
-                    else:
-                        logger.debug(f"Zep node search failed after {max_retries} attempts: {e}")
-            return None
-        
         try:
-            # Execute edges and nodes searches in parallel
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                edge_future = executor.submit(search_edges)
-                node_future = executor.submit(search_nodes)
+            all_edges = fetch_all_edges(self.graph_id)
+            all_nodes = fetch_all_nodes(self.graph_id)
 
-                # Get results
-                edge_result = edge_future.result(timeout=30)
-                node_result = node_future.result(timeout=30)
-
-            # Process edge search results
+            # Find edges mentioning this entity (by UUID or name)
             all_facts = set()
-            if edge_result and hasattr(edge_result, 'edges') and edge_result.edges:
-                for edge in edge_result.edges:
-                    if hasattr(edge, 'fact') and edge.fact:
+            for edge in all_edges:
+                if (edge.source_node_uuid == entity.uuid or
+                        edge.target_node_uuid == entity.uuid or
+                        (edge.fact and name_lower in edge.fact.lower())):
+                    if edge.fact:
                         all_facts.add(edge.fact)
             results["facts"] = list(all_facts)
-            
-            # Process node search results
+
+            # Find related nodes
             all_summaries = set()
-            if node_result and hasattr(node_result, 'nodes') and node_result.nodes:
-                for node in node_result.nodes:
-                    if hasattr(node, 'summary') and node.summary:
+            for node in all_nodes:
+                if node.name and node.name != entity_name:
+                    if node.summary and name_lower in node.summary.lower():
                         all_summaries.add(node.summary)
-                    if hasattr(node, 'name') and node.name and node.name != entity_name:
+                    elif node.name.lower() in name_lower or name_lower in node.name.lower():
                         all_summaries.add(f"Related entity: {node.name}")
             results["node_summaries"] = list(all_summaries)
 
@@ -406,13 +334,11 @@ class OasisProfileGenerator:
                 context_parts.append("Related entities:\n" + "\n".join(f"- {s}" for s in results["node_summaries"][:10]))
             results["context"] = "\n\n".join(context_parts)
 
-            logger.info(f"Zep hybrid retrieval complete: {entity_name}, retrieved {len(results['facts'])} facts, {len(results['node_summaries'])} related nodes")
+            logger.info(f"Graph retrieval complete: {entity_name}, retrieved {len(results['facts'])} facts, {len(results['node_summaries'])} related nodes")
 
-        except concurrent.futures.TimeoutError:
-            logger.warning(f"Zep retrieval timed out ({entity_name})")
         except Exception as e:
-            logger.warning(f"Zep retrieval failed ({entity_name}): {e}")
-        
+            logger.warning(f"Graph retrieval failed ({entity_name}): {e}")
+
         return results
     
     def _build_entity_context(self, entity: EntityNode) -> str:
@@ -476,17 +402,17 @@ class OasisProfileGenerator:
             if related_info:
                 context_parts.append("### Associated Entity Information\n" + "\n".join(related_info))
 
-        # 4. Use Zep hybrid retrieval to obtain richer information
-        zep_results = self._search_zep_for_entity(entity)
+        # 4. Use graph database retrieval to obtain richer information
+        graph_results = self._search_graph_for_entity(entity)
 
-        if zep_results.get("facts"):
+        if graph_results.get("facts"):
             # Deduplicate: exclude already-existing facts
-            new_facts = [f for f in zep_results["facts"] if f not in existing_facts]
+            new_facts = [f for f in graph_results["facts"] if f not in existing_facts]
             if new_facts:
-                context_parts.append("### Facts Retrieved from Zep\n" + "\n".join(f"- {f}" for f in new_facts[:15]))
+                context_parts.append("### Additional Facts from Graph\n" + "\n".join(f"- {f}" for f in new_facts[:15]))
 
-        if zep_results.get("node_summaries"):
-            context_parts.append("### Related Nodes Retrieved from Zep\n" + "\n".join(f"- {s}" for s in zep_results["node_summaries"][:10]))
+        if graph_results.get("node_summaries"):
+            context_parts.append("### Related Nodes from Graph\n" + "\n".join(f"- {s}" for s in graph_results["node_summaries"][:10]))
         
         return "\n\n".join(context_parts)
     

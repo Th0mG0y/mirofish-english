@@ -527,13 +527,22 @@ const fetchRunStatus = async () => {
         prevRedditRound.value = data.reddit_current_round
       }
       
+      // Detect whether simulation failed
+      if (data.runner_status === 'failed') {
+        addLog(`✗ Simulation failed: ${data.error || 'Unknown error'}`)
+        phase.value = 2
+        stopPolling()
+        emit('update-status', 'error')
+        return
+      }
+
       // Detect whether simulation is complete (via runner_status or platform completion status)
       const isCompleted = data.runner_status === 'completed' || data.runner_status === 'stopped'
 
       // Additional check: backend may not have updated runner_status yet but platforms already report completion
       // Check via twitter_completed and reddit_completed status
       const platformsCompleted = checkPlatformsCompleted(data)
-      
+
       if (isCompleted || platformsCompleted) {
         if (platformsCompleted && !isCompleted) {
           addLog('✓ All platform simulations detected as finished')
