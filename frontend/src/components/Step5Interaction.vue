@@ -8,11 +8,22 @@
           <!-- Report Header -->
           <div class="report-header-block">
             <div class="report-meta">
-              <span class="report-tag">Prediction Report</span>
+              <span class="report-tag">{{ reportTypeLabel }}</span>
               <span class="report-id">ID: {{ reportId || 'REF-2024-X92' }}</span>
             </div>
             <h1 class="main-title">{{ reportOutline.title }}</h1>
             <p class="sub-title">{{ reportOutline.summary }}</p>
+            <div v-if="reportMeta?.verification_summary || reportMeta?.run_trace" class="report-intelligence-panel">
+              <div class="intel-row">
+                <span class="intel-chip">Confidence {{ reportMeta?.verification_summary?.release_recommendation || 'pending' }}</span>
+                <span class="intel-chip">Searches {{ reportMeta?.run_trace?.search_queries_run || 0 }}</span>
+                <span class="intel-chip">Verified {{ reportMeta?.verification_summary?.verified_claims || 0 }}</span>
+                <span class="intel-chip">Unresolved {{ reportMeta?.verification_summary?.unresolved_claims || 0 }}</span>
+              </div>
+              <div v-if="reportMeta?.missing_critical_inputs?.length" class="intel-list">
+                Missing critical inputs: {{ reportMeta.missing_critical_inputs.slice(0, 3).map(item => item.item).join(', ') }}
+              </div>
+            </div>
             <div class="header-divider"></div>
           </div>
 
@@ -442,7 +453,8 @@ import { interviewAgents, getSimulationProfilesRealtime } from '../api/simulatio
 
 const props = defineProps({
   reportId: String,
-  simulationId: String
+  simulationId: String,
+  reportMeta: Object
 })
 
 const emit = defineEmits(['add-log', 'update-status'])
@@ -477,6 +489,11 @@ const generatedSections = ref({})
 const collapsedSections = ref(new Set())
 const currentSectionIndex = ref(null)
 const profiles = ref([])
+const reportTypeLabel = computed(() => {
+  const type = props.reportMeta?.intent?.report_type
+  if (!type) return 'Report'
+  return type.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+})
 
 // Helper Methods
 const isSectionCompleted = (sectionIndex) => {
@@ -1151,6 +1168,40 @@ watch(showAgentDropdown, (isOpen) => {
   line-height: 1.6;
   margin: 0 0 30px 0;
   font-weight: 400;
+}
+
+.report-intelligence-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 20px 0;
+  padding: 14px 16px;
+  border: 1px solid #E5E7EB;
+  background: #F9FAFB;
+  border-radius: 10px;
+}
+
+.intel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.intel-chip {
+  font-size: 11px;
+  font-weight: 600;
+  color: #374151;
+  background: #FFFFFF;
+  border: 1px solid #D1D5DB;
+  border-radius: 999px;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.intel-list {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #4B5563;
 }
 
 .header-divider {

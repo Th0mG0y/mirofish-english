@@ -44,6 +44,7 @@ npm run dev
 - Preserve AGPL notices, attribution, and license files.
 - Prefer small pull requests over large mixed changes.
 - Update setup or README content when developer workflow changes.
+- If you change the report pipeline, keep the report intent, evidence brief, claim ledger, quality gates, and run-trace behavior documented.
 
 ## Suggested Checks
 
@@ -54,6 +55,8 @@ cd backend
 uv run pytest tests -q
 cd ..
 ```
+
+If your change touches report generation, make sure the report reliability tests still pass, especially the intent, schema, search, evidence, claim-ledger, and quantitative-validation coverage.
 
 If your change affects setup or provider behavior, verify the relevant `.env` example still matches the code.
 

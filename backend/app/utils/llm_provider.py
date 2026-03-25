@@ -5,6 +5,9 @@ Supports OpenAI and Anthropic providers with unified interface
 
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
@@ -14,6 +17,13 @@ from .openai_compatible import is_local_base_url, resolve_openai_compatible_api_
 from ..utils.logger import get_logger
 
 logger = get_logger('mirofish.llm_provider')
+
+
+def _clean_json_text(content: str) -> str:
+    cleaned = (content or "").strip()
+    cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+    return cleaned.strip()
 
 
 def _dedupe_citations(citations: List["Citation"]) -> List["Citation"]:
@@ -202,13 +212,31 @@ class AnthropicProvider(LLMProvider):
         api_key: Optional[str] = None,
         model: Optional[str] = None
     ):
+        self._delegate: Optional[LLMProvider] = None
+
+        if Config.use_claude_cli_for_anthropic():
+            if api_key:
+                logger.info("CLAUDE_CLI_USE_CREDENTIALS is enabled; ignoring explicit Anthropic API key and using Claude CLI instead")
+            self._delegate = ClaudeCliProvider(model=model or Config.ANTHROPIC_MODEL_NAME)
+            self.api_key = ""
+            self.model = self._delegate.model
+            return
+
         try:
             from anthropic import Anthropic
         except ImportError:
             raise ImportError("anthropic package is required. Install with: pip install anthropic>=0.40.0")
 
-        self.api_key = api_key or Config.ANTHROPIC_API_KEY or Config.get_claude_cli_api_key()
+        explicit_api_key = api_key or Config.ANTHROPIC_API_KEY
+        cli_token = None if explicit_api_key else Config.get_claude_cli_api_key()
+        self.api_key = explicit_api_key or cli_token
         self.model = model or Config.ANTHROPIC_MODEL_NAME
+
+        if cli_token and Config.is_claude_cli_oauth_token(cli_token) and not explicit_api_key:
+            raise ValueError(
+                "Claude CLI OAuth access tokens are not supported by Anthropic API requests. "
+                "Set ANTHROPIC_API_KEY to use the Anthropic provider."
+            )
 
         if not self.api_key:
             raise ValueError("Anthropic API key is not configured")
@@ -224,6 +252,15 @@ class AnthropicProvider(LLMProvider):
         tools: Optional[List[Dict]] = None,
         response_format: Optional[Dict] = None
     ) -> ProviderResponse:
+        if self._delegate is not None:
+            return self._delegate.chat(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                response_format=response_format,
+            )
+
         # Separate system message from conversation messages
         system_content = ""
         conversation_messages = []
@@ -272,6 +309,8 @@ class AnthropicProvider(LLMProvider):
         return ProviderResponse(content=content, model=self.model, usage=usage)
 
     def supports_web_search(self) -> bool:
+        if self._delegate is not None:
+            return self._delegate.supports_web_search()
         return True
 
     def web_search(
@@ -280,6 +319,13 @@ class AnthropicProvider(LLMProvider):
         context: str = "",
         user_location: Optional[Dict] = None
     ) -> WebSearchResult:
+        if self._delegate is not None:
+            return self._delegate.web_search(
+                query=query,
+                context=context,
+                user_location=user_location,
+            )
+
         """Use Anthropic's built-in web search tool"""
         try:
             messages = [{"role": "user", "content": query}]
@@ -319,6 +365,289 @@ class AnthropicProvider(LLMProvider):
         except Exception as e:
             logger.warning(f"Anthropic web search failed: {e}")
             return WebSearchResult(query=query, answer=f"Search failed: {str(e)}", citations=[])
+
+
+class ClaudeCliProvider(LLMProvider):
+    """Claude Code-backed provider for Anthropic workloads"""
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        command: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+        permission_mode: Optional[str] = None,
+    ):
+        self.model = model or Config.ANTHROPIC_MODEL_NAME
+        self.command = command or Config.CLAUDE_CLI_COMMAND or "claude"
+        self.timeout_seconds = timeout_seconds or Config.CLAUDE_CLI_TIMEOUT_SECONDS
+        self.permission_mode = permission_mode or Config.CLAUDE_CLI_PERMISSION_MODE or "plan"
+
+        if not shutil.which(self.command):
+            raise ValueError(
+                f"Claude CLI command '{self.command}' was not found on PATH. "
+                "Set CLAUDE_CLI_COMMAND or install Claude Code."
+            )
+
+        self._verify_auth()
+        logger.info(f"ClaudeCliProvider initialized: model={self.model}, command={self.command}")
+
+    def _verify_auth(self) -> None:
+        result = subprocess.run(
+            [self.command, "auth", "status", "--text"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=min(self.timeout_seconds, 20),
+            check=False,
+        )
+        if result.returncode != 0:
+            error_text = (result.stderr or result.stdout or "").strip()
+            raise ValueError(
+                "Claude CLI is not authenticated. Run `claude auth login` first."
+                + (f" Details: {error_text}" if error_text else "")
+            )
+
+    def _split_messages(self, messages: List[Dict[str, str]]) -> tuple[str, List[Dict[str, str]]]:
+        system_parts: List[str] = []
+        conversation_messages: List[Dict[str, str]] = []
+
+        for msg in messages:
+            role = (msg.get("role") or "").strip().lower()
+            content = msg.get("content") or ""
+            if role == "system":
+                system_parts.append(content)
+            elif role in {"user", "assistant"}:
+                conversation_messages.append({"role": role, "content": content})
+
+        return "\n\n".join(part for part in system_parts if part), conversation_messages
+
+    def _render_conversation(self, messages: List[Dict[str, str]]) -> str:
+        if not messages:
+            return ""
+
+        if len(messages) == 1 and messages[0].get("role") == "user":
+            return messages[0].get("content", "").strip()
+
+        if all(message.get("role") == "user" for message in messages):
+            return "\n\n".join(
+                message.get("content", "").strip()
+                for message in messages
+                if message.get("content", "").strip()
+            )
+
+        lines = [
+            "Continue the conversation transcript below.",
+            "Return only the assistant's next reply to the final user message.",
+            "",
+            "Transcript:",
+        ]
+
+        for msg in messages:
+            role = msg.get("role", "user").strip().upper()
+            lines.append(f"{role}:")
+            lines.append(msg.get("content", "").strip())
+            lines.append("")
+
+        lines.append("ASSISTANT:")
+        return "\n".join(lines)
+
+    def _run_cli(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        json_schema: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        command = [
+            self.command,
+            "-p",
+            "--output-format",
+            "json",
+            "--no-session-persistence",
+        ]
+
+        if self.model:
+            command.extend(["--model", self.model])
+        if self.permission_mode:
+            command.extend(["--permission-mode", self.permission_mode])
+        if json_schema:
+            command.extend(["--json-schema", json.dumps(json_schema, ensure_ascii=False)])
+
+        system_prompt_path = None
+        if system_prompt.strip():
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as handle:
+                handle.write(system_prompt)
+                system_prompt_path = handle.name
+            command.extend(["--system-prompt-file", system_prompt_path])
+
+        prompt_instruction = (
+            "Use the piped input as the full task and return only the requested structured output."
+            if json_schema
+            else "Use the piped input as the full task and return only the assistant reply."
+        )
+        command.append(prompt_instruction)
+
+        try:
+            result = subprocess.run(
+                command,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        finally:
+            if system_prompt_path:
+                try:
+                    import os
+                    os.unlink(system_prompt_path)
+                except OSError:
+                    pass
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        if result.returncode != 0:
+            raise RuntimeError(stderr or stdout or "Claude CLI invocation failed")
+        if not stdout:
+            raise RuntimeError("Claude CLI returned no output")
+
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Claude CLI returned invalid JSON: {stdout}") from exc
+
+        if payload.get("is_error"):
+            raise RuntimeError(payload.get("result") or stderr or "Claude CLI reported an error")
+
+        return payload
+
+    def _usage_from_payload(self, payload: Dict[str, Any]) -> Optional[Dict[str, int]]:
+        usage = payload.get("usage") or {}
+        prompt_tokens = int(usage.get("input_tokens", 0) or 0)
+        completion_tokens = int(usage.get("output_tokens", 0) or 0)
+
+        if not prompt_tokens and not completion_tokens:
+            return None
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
+    def chat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: Optional[List[Dict]] = None,
+        response_format: Optional[Dict] = None
+    ) -> ProviderResponse:
+        system_prompt, conversation_messages = self._split_messages(messages)
+        json_schema = None
+        if response_format and response_format.get("type") == "json_schema":
+            json_schema = response_format.get("schema")
+        elif response_format and response_format.get("type") == "json_object":
+            json_instruction = (
+                "You must respond with valid JSON only. "
+                "Do not include any text, explanation, or markdown formatting outside the JSON object."
+            )
+            system_prompt = f"{system_prompt}\n\n{json_instruction}".strip() if system_prompt else json_instruction
+
+        payload = self._run_cli(
+            prompt=self._render_conversation(conversation_messages),
+            system_prompt=system_prompt,
+            json_schema=json_schema,
+        )
+
+        content = payload.get("result", "")
+        if response_format and response_format.get("type") == "json_schema":
+            content = json.dumps(payload.get("structured_output") or {}, ensure_ascii=False)
+        elif response_format and response_format.get("type") == "json_object":
+            content = _clean_json_text(content)
+
+        return ProviderResponse(
+            content=content.strip(),
+            model=self.model,
+            usage=self._usage_from_payload(payload),
+        )
+
+    def supports_web_search(self) -> bool:
+        return True
+
+    def web_search(
+        self,
+        query: str,
+        context: str = "",
+        user_location: Optional[Dict] = None
+    ) -> WebSearchResult:
+        prompt_sections = [
+            "Search the web for directly relevant evidence and answer the question.",
+            "",
+            f"Question: {query}",
+        ]
+
+        if context:
+            prompt_sections.extend([
+                "",
+                "Context:",
+                context,
+            ])
+
+        if user_location:
+            prompt_sections.extend([
+                "",
+                "User location hint:",
+                json.dumps(user_location, ensure_ascii=False),
+            ])
+
+        prompt_sections.extend([
+            "",
+            "Use live web search when helpful.",
+            "Return concise citations with url, title, and snippet only for sources you actually used.",
+        ])
+
+        payload = self._run_cli(
+            prompt="\n".join(prompt_sections),
+            system_prompt="You are a careful research assistant. Ground your answer in current external evidence.",
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"},
+                    "citations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string"},
+                                "title": {"type": "string"},
+                                "snippet": {"type": "string"},
+                            },
+                            "required": ["url", "title", "snippet"],
+                        },
+                    },
+                },
+                "required": ["answer", "citations"],
+            },
+        )
+
+        structured_output = payload.get("structured_output") or {}
+        citations = [
+            Citation(
+                url=item.get("url", ""),
+                title=item.get("title", ""),
+                snippet=item.get("snippet", ""),
+            )
+            for item in structured_output.get("citations", []) or []
+        ]
+        return WebSearchResult(
+            query=query,
+            answer=(structured_output.get("answer") or "").strip(),
+            citations=_dedupe_citations(citations),
+        )
 
 
 class OllamaProvider(LLMProvider):

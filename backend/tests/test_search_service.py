@@ -52,3 +52,21 @@ def test_enrich_document_includes_source_links_and_dedupes():
     assert "### market adoption outlook" in result.supplementary_context
     assert "**Sources**" in result.supplementary_context
     assert "https://example.com/source-1" in result.supplementary_context
+
+
+def test_search_service_records_search_intent_metadata():
+    service = SearchService(provider=EnrichmentProvider())
+
+    service.search(
+        "market adoption outlook",
+        context="fresh context",
+        intent="verification",
+        report_question="How strong is adoption?",
+        evidence_type="benchmark_data",
+    )
+
+    log = service.get_search_log()
+
+    assert log[0]["intent"] == "verification"
+    assert log[0]["report_question"] == "How strong is adoption?"
+    assert log[0]["evidence_type"] == "benchmark_data"

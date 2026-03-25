@@ -10,10 +10,10 @@ export const generateReport = (data) => {
 
 /**
  * Get report generation status
- * @param {string} reportId
+ * @param {Object} data - { task_id?, simulation_id? }
  */
-export const getReportStatus = (reportId) => {
-  return service.get(`/api/report/generate/status`, { params: { report_id: reportId } })
+export const getReportStatus = (data) => {
+  return service.post(`/api/report/generate/status`, data)
 }
 
 /**
@@ -40,6 +40,22 @@ export const getConsoleLog = (reportId, fromLine = 0) => {
  */
 export const getReport = (reportId) => {
   return service.get(`/api/report/${reportId}`)
+}
+
+/**
+ * Get persisted report generation progress
+ * @param {string} reportId
+ */
+export const getReportProgress = (reportId) => {
+  return service.get(`/api/report/${reportId}/progress`)
+}
+
+/**
+ * Get generated report sections saved so far
+ * @param {string} reportId
+ */
+export const getReportSections = (reportId) => {
+  return service.get(`/api/report/${reportId}/sections`)
 }
 
 /**

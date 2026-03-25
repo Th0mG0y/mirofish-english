@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+BACKEND_PYTHON_VERSION="3.12"
+
 step()  { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 ok()    { printf '    \033[1;32m[OK]\033[0m %s\n' "$1"; }
 err()   { printf '    \033[1;31m[ERROR]\033[0m %s\n' "$1"; }
@@ -24,10 +26,151 @@ elif [ "$OS" = "Linux" ]; then
     fi
 fi
 
+have_cmd() {
+    command -v "$1" &>/dev/null
+}
+
+refresh_brew_shellenv() {
+    if [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -x /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+}
+
+ensure_curl() {
+    if have_cmd curl; then
+        return 0
+    fi
+
+    case "$PKG" in
+        apt)
+            warn "curl not found - installing via apt..."
+            sudo apt-get update
+            sudo apt-get install -y curl ca-certificates
+            ;;
+        dnf)
+            warn "curl not found - installing via dnf..."
+            sudo dnf install -y curl ca-certificates
+            ;;
+        pacman)
+            warn "curl not found - installing via pacman..."
+            sudo pacman -S --noconfirm curl ca-certificates
+            ;;
+        *)
+            err "curl is required and could not be installed automatically."
+            exit 1
+            ;;
+    esac
+}
+
+install_homebrew() {
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    refresh_brew_shellenv
+}
+
+DOCKER_NEEDS_SUDO=false
+COMPOSE_STYLE=""
+
+docker_info_any() {
+    if docker info >/dev/null 2>&1; then
+        DOCKER_NEEDS_SUDO=false
+        return 0
+    fi
+
+    if [ "$OS" = "Linux" ] && sudo docker info >/dev/null 2>&1; then
+        DOCKER_NEEDS_SUDO=true
+        return 0
+    fi
+
+    return 1
+}
+
+wait_for_docker() {
+    local timeout="${1:-180}"
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if docker_info_any; then
+            return 0
+        fi
+
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    return 1
+}
+
+start_docker_runtime() {
+    case "$OS" in
+        Darwin)
+            open -a Docker
+            ;;
+        Linux)
+            if have_cmd systemctl; then
+                sudo systemctl enable --now docker
+            else
+                return 1
+            fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+docker_cli() {
+    if $DOCKER_NEEDS_SUDO; then
+        sudo docker "$@"
+    else
+        docker "$@"
+    fi
+}
+
+detect_compose() {
+    if docker_cli compose version >/dev/null 2>&1; then
+        COMPOSE_STYLE="plugin"
+        return 0
+    fi
+
+    if have_cmd docker-compose; then
+        if $DOCKER_NEEDS_SUDO; then
+            sudo docker-compose version >/dev/null 2>&1
+        else
+            docker-compose version >/dev/null 2>&1
+        fi
+
+        COMPOSE_STYLE="legacy"
+        return 0
+    fi
+
+    return 1
+}
+
+docker_compose_cli() {
+    if [ "$COMPOSE_STYLE" = "plugin" ]; then
+        docker_cli compose "$@"
+    else
+        if $DOCKER_NEEDS_SUDO; then
+            sudo docker-compose "$@"
+        else
+            docker-compose "$@"
+        fi
+    fi
+}
+
 # Helper: extract major.minor from python version string (portable, no grep -P)
 python_version() {
     "$1" --version 2>&1 | sed -n 's/.*Python \([0-9]*\.[0-9]*\).*/\1/p'
 }
+
+if [ "$OS" = "Darwin" ] && [ -z "$PKG" ]; then
+    warn "Homebrew not found - installing it so dependencies can be installed automatically..."
+    ensure_curl
+    install_homebrew
+    PKG="brew"
+fi
 
 # -----------------------------------------------------------
 # 1. Dependency checks & auto-install
@@ -51,7 +194,7 @@ if [ -z "$PYTHON_CMD" ]; then
     case "$PKG" in
         brew)
             warn "Python 3.11+ not found - installing via Homebrew..."
-            brew install python@3.13
+            brew install python@3.12
             ;;
         apt)
             warn "Python 3.11+ not found - installing via apt..."
@@ -101,11 +244,13 @@ if ! $node_ok; then
             ;;
         apt)
             warn "Node.js 18+ not found - installing via NodeSource..."
+            ensure_curl
             curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
             sudo apt-get install -y nodejs
             ;;
         dnf)
             warn "Node.js 18+ not found - installing via NodeSource..."
+            ensure_curl
             curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
             sudo dnf install -y nodejs
             ;;
@@ -135,30 +280,19 @@ else
         brew)
             warn "Docker not found - installing Docker via Homebrew..."
             brew install --cask docker
-            warn "Docker Desktop was installed. Please launch it from Applications, then re-run this script."
-            exit 1
             ;;
         apt)
             warn "Docker not found - installing via apt..."
             sudo apt-get update
             sudo apt-get install -y docker.io docker-compose-plugin
-            sudo systemctl start docker
-            sudo usermod -aG docker "$USER"
-            warn "You were added to the docker group. You may need to log out and back in, then re-run this script."
             ;;
         dnf)
             warn "Docker not found - installing via dnf..."
             sudo dnf install -y docker docker-compose-plugin
-            sudo systemctl start docker
-            sudo usermod -aG docker "$USER"
-            warn "You were added to the docker group. You may need to log out and back in, then re-run this script."
             ;;
         pacman)
             warn "Docker not found - installing via pacman..."
             sudo pacman -S --noconfirm docker docker-compose
-            sudo systemctl start docker
-            sudo usermod -aG docker "$USER"
-            warn "You were added to the docker group. You may need to log out and back in, then re-run this script."
             ;;
         *)
             err "Docker is required and could not be installed automatically."
@@ -166,19 +300,66 @@ else
             exit 1
             ;;
     esac
-    # Verify docker works now
-    if ! command -v docker &>/dev/null; then
-        err "Docker was installed but is not yet available. Please restart your terminal and re-run this script."
+fi
+
+if ! have_cmd docker; then
+    err "Docker was installed but is not yet available in this terminal."
+    echo "    Restart your terminal and re-run this script."
+    exit 1
+fi
+
+if ! wait_for_docker 5; then
+    warn "Docker is installed but not running - attempting to start it..."
+    if ! start_docker_runtime; then
+        err "Docker could not be started automatically."
+        echo "    Start Docker manually, wait for it to finish booting, then re-run this script."
         exit 1
     fi
-    ok "Docker installed"
+
+    echo "    Waiting for Docker to become ready..."
+    if ! wait_for_docker 180; then
+        err "Docker did not become ready in time."
+        echo "    Open Docker and wait until it is fully running, then re-run this script."
+        exit 1
+    fi
 fi
+
+if ! detect_compose; then
+    case "$PKG" in
+        apt)
+            warn "Docker Compose not found - installing via apt..."
+            sudo apt-get update
+            sudo apt-get install -y docker-compose-plugin
+            ;;
+        dnf)
+            warn "Docker Compose not found - installing via dnf..."
+            sudo dnf install -y docker-compose-plugin
+            ;;
+        pacman)
+            warn "Docker Compose not found - installing via pacman..."
+            sudo pacman -S --noconfirm docker-compose
+            ;;
+        *)
+            err "Docker Compose is required and could not be installed automatically."
+            exit 1
+            ;;
+    esac
+
+    if ! detect_compose; then
+        err "Docker Compose is required and is still not available."
+        exit 1
+    fi
+fi
+
+ok "Docker is ready"
+ok "Docker Compose found"
 
 # --- uv ---
 if command -v uv &>/dev/null; then
     ok "uv found"
 else
     warn "uv not found - installing..."
+    ensure_curl
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
     ok "uv installed"
@@ -188,7 +369,13 @@ fi
 # 2. Start Neo4j via Docker Compose
 # -----------------------------------------------------------
 step "Starting Neo4j..."
-docker compose up neo4j -d
+if ! docker_cli image inspect neo4j:5.26 >/dev/null 2>&1; then
+    warn "Neo4j image not found - pulling neo4j:5.26..."
+    docker_cli pull neo4j:5.26
+fi
+
+ok "Neo4j image ready (neo4j:5.26)"
+docker_compose_cli up neo4j -d
 
 echo "    Waiting for Neo4j to become ready..."
 ready=false
@@ -226,7 +413,18 @@ echo "    Installing frontend packages..."
 (cd frontend && npm install)
 
 echo "    Installing backend packages..."
-(cd backend && uv sync && uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0")
+(
+    cd backend
+    echo "    Installing backend Python $BACKEND_PYTHON_VERSION via uv..."
+    uv python install "$BACKEND_PYTHON_VERSION"
+    echo "    Syncing backend environment with Python $BACKEND_PYTHON_VERSION..."
+    uv sync --python "$BACKEND_PYTHON_VERSION"
+    if [ ! -x ".venv/bin/python" ]; then
+        err "Backend virtual environment was not created correctly."
+        exit 1
+    fi
+    uv pip install --python ".venv/bin/python" "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
+)
 
 ok "All dependencies installed"
 

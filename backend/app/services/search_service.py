@@ -4,14 +4,15 @@ Uses the multi-provider LLM abstraction for web search capabilities
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 
 from ..config import Config
 from ..utils.logger import get_logger
-from ..utils.llm_provider import (
-    LLMProvider, ProviderFactory, WebSearchResult, Citation
-)
+from ..utils.llm_provider import LLMProvider, ProviderFactory, WebSearchResult, Citation
+from .report_artifacts import SearchExecutionArtifact
+from .source_quality_ranker import SourceQualityRanker
 
 logger = get_logger('mirofish.search_service')
 
@@ -37,6 +38,32 @@ class FactCheckResult:
     explanation: str = ""
 
 
+@dataclass
+class SearchLogEntry:
+    query: str
+    intent: str = "discovery"
+    context: str = ""
+    report_question: str = ""
+    evidence_type: str = ""
+    citations_count: int = 0
+    answer_length: int = 0
+    usable_evidence: bool = False
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "query": self.query,
+            "intent": self.intent,
+            "context": self.context,
+            "report_question": self.report_question,
+            "evidence_type": self.evidence_type,
+            "citations_count": self.citations_count,
+            "answer_length": self.answer_length,
+            "usable_evidence": self.usable_evidence,
+            "timestamp": self.timestamp,
+        }
+
+
 class SearchService:
     """
     Unified search service providing web search, document enrichment, and fact-checking.
@@ -44,7 +71,8 @@ class SearchService:
 
     def __init__(self, provider: Optional[LLMProvider] = None):
         self._provider = provider
-        self._search_log: List[Dict[str, Any]] = []
+        self._search_log: List[SearchLogEntry] = []
+        self._ranker = SourceQualityRanker()
         logger.info("SearchService initialized")
 
     @property
@@ -54,7 +82,14 @@ class SearchService:
             self._provider = ProviderFactory.create_search_provider()
         return self._provider
 
-    def search(self, query: str, context: str = "") -> WebSearchResult:
+    def search(
+        self,
+        query: str,
+        context: str = "",
+        intent: str = "discovery",
+        report_question: str = "",
+        evidence_type: str = "",
+    ) -> WebSearchResult:
         """
         Perform a web search.
 
@@ -72,19 +107,52 @@ class SearchService:
                 "Use Anthropic or the real OpenAI API for search."
             )
             logger.warning(message)
-            return WebSearchResult(query=query, answer=message, citations=[])
+            result = WebSearchResult(query=query, answer=message, citations=[])
+            self._append_search_log(
+                query=query,
+                context=context,
+                intent=intent,
+                report_question=report_question,
+                evidence_type=evidence_type,
+                result=result,
+            )
+            return result
 
         result = self.provider.web_search(query=query, context=context)
 
-        # Log the search
-        self._search_log.append({
-            "query": query,
-            "citations_count": len(result.citations),
-            "answer_length": len(result.answer)
-        })
+        self._append_search_log(
+            query=query,
+            context=context,
+            intent=intent,
+            report_question=report_question,
+            evidence_type=evidence_type,
+            result=result,
+        )
 
         logger.info(f"Search complete: {len(result.citations)} citations")
         return result
+
+    def _append_search_log(
+        self,
+        query: str,
+        context: str,
+        intent: str,
+        report_question: str,
+        evidence_type: str,
+        result: WebSearchResult,
+    ) -> None:
+        self._search_log.append(
+            SearchLogEntry(
+                query=query,
+                intent=intent,
+                context=context,
+                report_question=report_question,
+                evidence_type=evidence_type,
+                citations_count=len(result.citations),
+                answer_length=len(result.answer or ""),
+                usable_evidence=bool((result.answer or "").strip()) or bool(result.citations),
+            )
+        )
 
     def _dedupe_citations(self, citations: List[Citation]) -> List[Citation]:
         seen = set()
@@ -132,6 +200,41 @@ class SearchService:
             result = self.search(query)
             results.append(result)
         return results
+
+    def search_plan(self, queries: List[Dict[str, Any]]) -> List[SearchExecutionArtifact]:
+        executions: List[SearchExecutionArtifact] = []
+        for query_spec in queries:
+            context_parts = []
+            if query_spec.get("source_chunk"):
+                context_parts.append(query_spec.get("source_chunk"))
+            elif query_spec.get("reason"):
+                context_parts.append(query_spec.get("reason"))
+            result = self.search(
+                query=query_spec.get("query", ""),
+                context="\n\n".join(part for part in context_parts if part),
+                intent=query_spec.get("intent", "discovery"),
+                report_question=query_spec.get("report_question", ""),
+                evidence_type=query_spec.get("evidence_type", ""),
+            )
+            quality_summary = self._ranker.summarize(result.citations, query_spec.get("query", ""))
+            ranked_sources = self._ranker.rank_sources(result.citations, query_spec.get("query", ""))
+            relevant_sources = [
+                item for item in ranked_sources
+                if item.relevance != "off_topic" and item.score >= 0.35
+            ]
+            freshness = quality_summary.get("freshness", "unknown")
+            executions.append(
+                SearchExecutionArtifact(
+                    query=query_spec.get("query", ""),
+                    intent=query_spec.get("intent", "discovery"),
+                    answer=result.answer if relevant_sources else "",
+                    citations=[self._citation_to_dict(item.citation) for item in relevant_sources[:5]],
+                    usable_evidence=bool(relevant_sources),
+                    source_quality_summary=quality_summary,
+                    freshness=freshness,
+                )
+            )
+        return executions
 
     def enrich_document(self, document_text: str, requirement: str) -> EnrichmentResult:
         """
@@ -185,7 +288,13 @@ Return a JSON object: {{"queries": ["query1", "query2", ...]}}"""
         context_parts = []
 
         for query in queries:
-            result = self.search(query, context=f"Research context: {requirement}")
+            result = self.search(
+                query,
+                context=f"Research context: {requirement}",
+                intent="discovery",
+                report_question=requirement,
+                evidence_type="supplementary_context",
+            )
             context_parts.append(self._format_search_context(query, result))
             all_citations.extend(result.citations)
 
@@ -217,8 +326,35 @@ Return a JSON object: {{"queries": ["query1", "query2", ...]}}"""
         # Search for evidence
         search_result = self.search(
             query=f"Is it true that {claim}",
-            context="You are a fact-checker. Find evidence supporting or contradicting this claim. Be objective."
+            context="You are a fact-checker. Find evidence supporting or contradicting this claim. Be objective.",
+            intent="verification",
+            report_question=claim,
+            evidence_type="claim_verification",
         )
+        ranked_sources = self._ranker.rank_sources(search_result.citations, claim)
+        relevant_sources = [
+            item for item in ranked_sources
+            if item.relevance != "off_topic" and item.score >= 0.4
+        ]
+
+        if not relevant_sources:
+            return FactCheckResult(
+                claim=claim,
+                verdict="inconclusive",
+                confidence=0.0,
+                explanation="Search did not return directly relevant sources for this claim.",
+            )
+
+        evidence_text = search_result.answer.strip()
+        if relevant_sources:
+            evidence_lines = []
+            for item in relevant_sources[:5]:
+                title = item.citation.title or item.citation.url or "Untitled source"
+                snippet = item.citation.snippet or "No snippet available."
+                evidence_lines.append(
+                    f"- [{item.source_type} | {item.relevance} | score={item.score:.2f}] {title}: {snippet}"
+                )
+            evidence_text = "\n".join([evidence_text, "", "Relevant citations:", *evidence_lines]).strip()
 
         # Analyze the evidence
         analysis_prompt = f"""Based on the following search results, fact-check this claim:
@@ -226,7 +362,7 @@ Return a JSON object: {{"queries": ["query1", "query2", ...]}}"""
 Claim: {claim}
 
 Search results:
-{search_result.answer}
+{evidence_text}
 
 Provide your analysis as JSON:
 {{
@@ -262,10 +398,20 @@ Provide your analysis as JSON:
             confidence = 0.0
             explanation = f"Analysis failed: {str(e)}"
 
+        has_strong_direct_evidence = any(
+            item.relevance == "direct" and item.score >= 0.5
+            for item in relevant_sources
+        )
+        if verdict in {"supported", "contradicted"} and not has_strong_direct_evidence:
+            verdict = "inconclusive"
+            confidence = min(confidence, 0.35)
+            explanation = "Search returned only weakly relevant sources, so the claim remains unresolved."
+
         # Categorize citations
         supporting = []
         contradicting = []
-        for cite in search_result.citations:
+        for item in relevant_sources:
+            cite = item.citation
             if verdict == "supported":
                 supporting.append(cite)
             elif verdict == "contradicted":
@@ -281,5 +427,11 @@ Provide your analysis as JSON:
         )
 
     def get_search_log(self) -> List[Dict[str, Any]]:
-        """Get the search history log"""
-        return self._search_log.copy()
+        return [entry.to_dict() for entry in self._search_log]
+
+    def _citation_to_dict(self, citation: Citation) -> Dict[str, str]:
+        return {
+            "url": citation.url,
+            "title": citation.title,
+            "snippet": citation.snippet,
+        }

@@ -561,6 +561,36 @@ The one-click scripts already do this automatically.
 7. If graph or ontology imports fail, run the optional backend package refresh from Step 7
 8. Run `npm run dev`
 
+## Report Intelligence Notes
+
+The report stage now runs as an evidence-first pipeline instead of a simulation-only drafting pass.
+
+What happens during report generation:
+
+1. the backend classifies report intent
+2. it builds a structured search plan
+3. it assembles an evidence brief from uploaded files, graph context, external search, and optional simulation or deliberation outputs
+4. it tracks major claims in a claim ledger
+5. it detects missing critical inputs before finalization
+6. it runs deterministic quantitative checks and editorial quality gates
+7. it emits run-trace metadata through the report API
+
+What this means for providers:
+
+- web-search-capable providers are strongly recommended for report quality
+- if the search provider cannot ground current facts, the report can still run, but confidence and quality gates will reflect that limitation
+- simulation is still supported, but it is now used selectively when the report intent benefits from stress-testing, stakeholder reactions, or second-order effects
+
+What you can expect in the report output:
+
+- verified vs inferred claims
+- missing critical inputs
+- quantitative checks
+- constraints and dependencies
+- alternative interpretations or scenarios
+- methodology note
+- run trace
+
 ### Anthropic + OpenAI vectors
 
 1. Install Node.js, Python, `uv`, and Docker Desktop

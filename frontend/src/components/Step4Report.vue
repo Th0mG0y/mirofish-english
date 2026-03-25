@@ -8,11 +8,25 @@
           <!-- Report Header -->
           <div class="report-header-block">
             <div class="report-meta">
-              <span class="report-tag">Prediction Report</span>
+              <span class="report-tag">{{ reportTypeLabel }}</span>
               <span class="report-id">ID: {{ reportId || 'REF-2024-X92' }}</span>
             </div>
             <h1 class="main-title">{{ reportOutline.title }}</h1>
             <p class="sub-title">{{ reportOutline.summary }}</p>
+            <div v-if="reportMeta?.verification_summary || reportMeta?.run_trace" class="report-intelligence-panel">
+              <div class="intel-row">
+                <span class="intel-chip">Confidence {{ reportMeta?.verification_summary?.release_recommendation || 'pending' }}</span>
+                <span class="intel-chip">Searches {{ reportMeta?.run_trace?.search_queries_run || 0 }}</span>
+                <span class="intel-chip">Verified {{ reportMeta?.verification_summary?.verified_claims || 0 }}</span>
+                <span class="intel-chip">Unresolved {{ reportMeta?.verification_summary?.unresolved_claims || 0 }}</span>
+              </div>
+              <div v-if="reportMeta?.missing_critical_inputs?.length" class="intel-list">
+                Missing critical inputs: {{ reportMeta.missing_critical_inputs.slice(0, 3).map(item => item.item).join(', ') }}
+              </div>
+              <div v-if="reportMeta?.quality_gates?.length" class="intel-list">
+                Quality gates: {{ reportMeta.quality_gates.map(gate => `${gate.name}:${gate.status}`).join(' | ') }}
+              </div>
+            </div>
             <div class="header-divider"></div>
           </div>
 
@@ -72,7 +86,7 @@
             <div class="waiting-ring"></div>
             <div class="waiting-ring"></div>
           </div>
-          <span class="waiting-text">Waiting for Report Agent...</span>
+          <span class="waiting-text">{{ progressStatusText }}</span>
         </div>
       </div>
 
@@ -86,7 +100,7 @@
         </div>
 
         <!-- Workflow Overview (flat, status-based palette) -->
-        <div class="workflow-overview" v-if="agentLogs.length > 0 || reportOutline">
+        <div class="workflow-overview" v-if="agentLogs.length > 0 || reportOutline || reportProgress">
           <div class="workflow-metrics">
             <div class="metric">
               <span class="metric-label">Sections</span>
@@ -368,7 +382,7 @@
           <!-- Empty State -->
           <div v-if="agentLogs.length === 0 && !isComplete" class="workflow-empty">
             <div class="empty-pulse"></div>
-            <span>Waiting for agent activity...</span>
+            <span>{{ progressStatusText }}</span>
           </div>
         </div>
       </div>
@@ -380,13 +394,14 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, h, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { getAgentLog, getConsoleLog } from '../api/report'
+import { getAgentLog, getConsoleLog, getReportProgress, getReportSections } from '../api/report'
 
 const router = useRouter()
 
 const props = defineProps({
   reportId: String,
   simulationId: String,
+  reportMeta: Object,
   systemLogs: Array
 })
 
@@ -412,9 +427,15 @@ const expandedLogs = ref(new Set())
 const collapsedSections = ref(new Set())
 const isComplete = ref(false)
 const startTime = ref(null)
+const reportProgress = ref(null)
 const leftPanel = ref(null)
 const rightPanel = ref(null)
 const showRawResult = reactive({})
+const reportTypeLabel = computed(() => {
+  const type = props.reportMeta?.intent?.report_type
+  if (!type) return 'Report'
+  return type.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+})
 
 // Toggle functions
 const toggleRawResult = (timestamp, event) => {
@@ -1690,12 +1711,19 @@ const QuickSearchDisplay = {
 // Computed
 const statusClass = computed(() => {
   if (isComplete.value) return 'completed'
+  const progressStatus = normalizeReportStatus(reportProgress.value?.status || props.reportMeta?.status)
+  if (progressStatus === 'error') return 'error'
+  if (progressStatus === 'planning' || progressStatus === 'processing') return 'processing'
   if (agentLogs.value.length > 0) return 'processing'
   return 'pending'
 })
 
 const statusText = computed(() => {
   if (isComplete.value) return 'Completed'
+  const progressStatus = normalizeReportStatus(reportProgress.value?.status || props.reportMeta?.status)
+  if (progressStatus === 'error') return 'Failed'
+  if (progressStatus === 'planning') return 'Planning...'
+  if (progressStatus === 'processing') return 'Generating...'
   if (agentLogs.value.length > 0) return 'Generating...'
   return 'Waiting'
 })
@@ -1744,7 +1772,9 @@ const isPlanningDone = computed(() => {
 })
 
 const isPlanningStarted = computed(() => {
-  return agentLogs.value.some(l => l.action === 'planning_start' || l.action === 'report_start')
+  const progressStatus = normalizeReportStatus(reportProgress.value?.status || props.reportMeta?.status)
+  return progressStatus === 'planning' || progressStatus === 'processing'
+    || agentLogs.value.some(l => l.action === 'planning_start' || l.action === 'report_start')
 })
 
 const isFinalizing = computed(() => {
@@ -1995,6 +2025,112 @@ const getActionLabel = (action) => {
 // Polling
 let agentLogTimer = null
 let consoleLogTimer = null
+let progressTimer = null
+
+const normalizeReportStatus = (status) => {
+  const normalized = String(status || '').toLowerCase()
+  if (normalized === 'completed') return 'completed'
+  if (normalized === 'failed' || normalized === 'error') return 'error'
+  if (normalized === 'planning') return 'planning'
+  if (normalized === 'pending') return 'pending'
+  return 'processing'
+}
+
+const progressStatusText = computed(() => {
+  if (reportProgress.value?.message) return reportProgress.value.message
+  const reportStatus = normalizeReportStatus(props.reportMeta?.status)
+  if (reportStatus === 'planning') return 'Planning report outline...'
+  if (reportStatus === 'processing') return 'Generating report...'
+  if (reportStatus === 'completed') return 'Report generation complete.'
+  if (reportStatus === 'error') return 'Report generation failed.'
+  return 'Waiting for report generation to start...'
+})
+
+const hydrateOutlineFromMeta = () => {
+  if (props.reportMeta?.outline?.sections?.length) {
+    reportOutline.value = props.reportMeta.outline
+  }
+}
+
+const syncCurrentSectionFromProgress = () => {
+  const currentSection = reportProgress.value?.current_section
+  if (!currentSection || !reportOutline.value?.sections?.length) {
+    if (isComplete.value) currentSectionIndex.value = null
+    return
+  }
+
+  const outlineIndex = reportOutline.value.sections.findIndex(section => section.title === currentSection)
+  currentSectionIndex.value = outlineIndex >= 0 ? outlineIndex + 1 : null
+}
+
+const hydrateSavedSections = (sections = []) => {
+  if (!sections.length) return
+
+  const nextSections = { ...generatedSections.value }
+  sections.forEach(section => {
+    if (section?.section_index && section?.content) {
+      nextSections[section.section_index] = section.content
+    }
+  })
+  generatedSections.value = nextSections
+}
+
+const applyMetaState = () => {
+  hydrateOutlineFromMeta()
+
+  const reportStatus = normalizeReportStatus(props.reportMeta?.status)
+  if (reportStatus === 'completed') {
+    isComplete.value = true
+    currentSectionIndex.value = null
+    emit('update-status', 'completed')
+  } else if (reportStatus === 'error') {
+    emit('update-status', 'error')
+  }
+}
+
+const fetchReportProgressState = async () => {
+  if (!props.reportId) return
+
+  try {
+    const res = await getReportProgress(props.reportId)
+    if (res.success && res.data) {
+      reportProgress.value = res.data
+
+      const normalizedStatus = normalizeReportStatus(res.data.status)
+      if (normalizedStatus === 'completed') {
+        isComplete.value = true
+        currentSectionIndex.value = null
+        emit('update-status', 'completed')
+      } else if (normalizedStatus === 'error') {
+        emit('update-status', 'error')
+      } else {
+        emit('update-status', 'processing')
+      }
+
+      syncCurrentSectionFromProgress()
+    }
+  } catch (err) {
+    console.warn('Failed to fetch report progress:', err)
+  }
+}
+
+const fetchSavedSections = async () => {
+  if (!props.reportId) return
+
+  try {
+    const res = await getReportSections(props.reportId)
+    if (res.success && res.data) {
+      hydrateSavedSections(res.data.sections || [])
+      if (res.data.is_complete) {
+        isComplete.value = true
+        currentSectionIndex.value = null
+        emit('update-status', 'completed')
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch saved report sections:', err)
+  }
+}
 
 const fetchAgentLog = async () => {
   if (!props.reportId) return
@@ -2131,13 +2267,21 @@ const fetchConsoleLog = async () => {
 }
 
 const startPolling = () => {
-  if (agentLogTimer || consoleLogTimer) return
+  if (agentLogTimer || consoleLogTimer || progressTimer) return
   
+  hydrateOutlineFromMeta()
+  applyMetaState()
+  fetchReportProgressState()
+  fetchSavedSections()
   fetchAgentLog()
   fetchConsoleLog()
   
   agentLogTimer = setInterval(fetchAgentLog, 2000)
   consoleLogTimer = setInterval(fetchConsoleLog, 1500)
+  progressTimer = setInterval(() => {
+    fetchReportProgressState()
+    fetchSavedSections()
+  }, 2500)
 }
 
 const stopPolling = () => {
@@ -2148,6 +2292,10 @@ const stopPolling = () => {
   if (consoleLogTimer) {
     clearInterval(consoleLogTimer)
     consoleLogTimer = null
+  }
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
   }
 }
 
@@ -2177,10 +2325,16 @@ watch(() => props.reportId, (newId) => {
     collapsedSections.value = new Set()
     isComplete.value = false
     startTime.value = null
+    reportProgress.value = null
     
+    stopPolling()
     startPolling()
   }
 }, { immediate: true })
+
+watch(() => props.reportMeta, () => {
+  applyMetaState()
+}, { deep: true, immediate: true })
 </script>
 
 <style scoped>
@@ -2383,6 +2537,40 @@ watch(() => props.reportId, (newId) => {
   line-height: 1.6;
   margin: 0 0 30px 0;
   font-weight: 400;
+}
+
+.report-intelligence-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 20px 0;
+  padding: 14px 16px;
+  border: 1px solid #E5E7EB;
+  background: #F9FAFB;
+  border-radius: 10px;
+}
+
+.intel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.intel-chip {
+  font-size: 11px;
+  font-weight: 600;
+  color: #374151;
+  background: #FFFFFF;
+  border: 1px solid #D1D5DB;
+  border-radius: 999px;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.intel-list {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #4B5563;
 }
 
 .header-divider {

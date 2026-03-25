@@ -3,6 +3,11 @@
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $PSNativeCommandUseErrorActionPreference = $true
+}
+
+$backendPythonVersion = "3.12"
 
 function Write-Step { param([string]$msg) Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$msg) Write-Host "    [OK] $msg" -ForegroundColor Green }
@@ -23,6 +28,55 @@ function Update-Path {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machinePath;$userPath"
+}
+
+function Test-Command {
+    param([string]$Name)
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Assert-LastExitCode {
+    param([string]$Context)
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Context failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Wait-ForDocker {
+    param([int]$TimeoutSeconds = 180)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            & docker info *> $null
+            return $true
+        } catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+
+    return $false
+}
+
+function Start-DockerDesktop {
+    $candidates = @()
+
+    if ($Env:ProgramFiles) {
+        $candidates += (Join-Path $Env:ProgramFiles "Docker\Docker\Docker Desktop.exe")
+    }
+
+    if ($Env:LocalAppData) {
+        $candidates += (Join-Path $Env:LocalAppData "Programs\Docker\Docker\Docker Desktop.exe")
+    }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            Start-Process -FilePath $candidate | Out-Null
+            return $true
+        }
+    }
+
+    return $false
 }
 
 # -----------------------------------------------------------
@@ -46,7 +100,8 @@ foreach ($cmd in @("python", "python3")) {
 if (-not $pythonCmd) {
     if ($hasWinget) {
         Write-Warn "Python 3.11+ not found - installing via winget..."
-        winget install Python.Python.3.13 --accept-package-agreements --accept-source-agreements
+        winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+        Assert-LastExitCode "Python installation"
         Update-Path
         # Re-check
         foreach ($cmd in @("python", "python3")) {
@@ -79,6 +134,7 @@ if (-not $nodeOk) {
     if ($hasWinget) {
         Write-Warn "Node.js 18+ not found - installing via winget..."
         winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+        Assert-LastExitCode "Node.js installation"
         Update-Path
         try {
             $nodeVer = & node --version 2>&1
@@ -102,17 +158,47 @@ if (-not $dockerOk) {
     if ($hasWinget) {
         Write-Warn "Docker not found - installing Docker Desktop via winget..."
         winget install Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
+        Assert-LastExitCode "Docker installation"
         Update-Path
-        Write-Warn "Docker Desktop was installed. You may need to restart your PC and launch Docker Desktop before continuing."
-        Write-Warn "After Docker is running, re-run this script."
-        exit 1
     } else {
         Write-Err "Docker is required and could not be installed automatically."
         Write-Host "    Install from: https://docs.docker.com/get-docker/"
         exit 1
     }
 }
-Write-Ok "Docker found"
+
+if (-not (Test-Command "docker")) {
+    Write-Err "Docker was installed but is not yet available in this terminal."
+    Write-Host "    Restart PowerShell and re-run this script."
+    exit 1
+}
+
+if (-not (Wait-ForDocker -TimeoutSeconds 5)) {
+    Write-Warn "Docker is installed but not running - attempting to start Docker Desktop..."
+    if (-not (Start-DockerDesktop)) {
+        Write-Err "Docker Desktop could not be started automatically."
+        Write-Host "    Launch Docker Desktop once, wait for it to finish starting, then re-run this script."
+        exit 1
+    }
+
+    Write-Host "    Waiting for Docker to become ready..."
+    if (-not (Wait-ForDocker)) {
+        Write-Err "Docker Desktop did not become ready in time."
+        Write-Host "    Open Docker Desktop, wait until it says it is running, then re-run this script."
+        exit 1
+    }
+}
+
+$composeOk = $false
+try { $null = & docker compose version 2>&1; $composeOk = $true } catch {}
+if (-not $composeOk) {
+    Write-Err "Docker Compose is required and is not available."
+    Write-Host "    Ensure Docker Desktop finished installing correctly, then re-run this script."
+    exit 1
+}
+
+Write-Ok "Docker found and ready"
+Write-Ok "Docker Compose found"
 
 # --- uv ---
 $uvFound = $false
@@ -125,6 +211,7 @@ if (-not $uvFound) {
         Update-Path
     } catch {
         & $pythonCmd -m pip install uv --quiet
+        Assert-LastExitCode "uv installation"
     }
     Write-Ok "uv installed"
 } else {
@@ -135,7 +222,23 @@ if (-not $uvFound) {
 # 2. Start Neo4j via Docker Compose
 # -----------------------------------------------------------
 Write-Step "Starting Neo4j..."
+$neo4jImage = "neo4j:5.26"
+$neo4jImageReady = $false
+
+try {
+    & docker image inspect $neo4jImage *> $null
+    $neo4jImageReady = $true
+} catch {}
+
+if (-not $neo4jImageReady) {
+    Write-Warn "Neo4j image not found - pulling $neo4jImage..."
+    docker pull $neo4jImage
+    Assert-LastExitCode "Neo4j image pull"
+}
+
+Write-Ok "Neo4j image ready ($neo4jImage)"
 docker compose up neo4j -d
+Assert-LastExitCode "Neo4j startup"
 
 Write-Host "    Waiting for Neo4j to become ready..."
 $ready = $false
@@ -172,14 +275,30 @@ Write-Step "Installing dependencies..."
 
 Write-Host "    Installing root packages..."
 npm install --prefix $root
+Assert-LastExitCode "Root npm install"
 
 Write-Host "    Installing frontend packages..."
 npm install --prefix (Join-Path $root "frontend")
+Assert-LastExitCode "Frontend npm install"
 
 Write-Host "    Installing backend packages..."
 Push-Location (Join-Path $root "backend")
-uv sync
-uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
+$backendPython = Join-Path (Join-Path (Get-Location) ".venv") "Scripts\python.exe"
+
+Write-Host "    Installing backend Python $backendPythonVersion via uv..."
+uv python install $backendPythonVersion
+Assert-LastExitCode "Backend Python installation"
+
+Write-Host "    Syncing backend environment with Python $backendPythonVersion..."
+uv sync --python $backendPythonVersion
+Assert-LastExitCode "Backend dependency sync"
+
+if (-not (Test-Path $backendPython)) {
+    throw "Backend virtual environment was not created at $backendPython."
+}
+
+uv pip install --python $backendPython "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
+Assert-LastExitCode "Backend package refresh"
 Pop-Location
 
 Write-Ok "All dependencies installed"

@@ -23,6 +23,30 @@ MiroFish is dedicated to creating a swarm intelligence mirror that maps reality.
 
 From serious predictions to playful simulations, we let every "what if" see its outcome, making it possible to predict anything.
 
+## Report Intelligence Engine
+
+This repository is no longer just a simulation report writer.
+
+The report stage now treats MiroFish as a **report intelligence engine** built around:
+
+- uploaded source documents as the primary anchor
+- web grounding and verification as a normal part of report generation
+- graph retrieval as structured context and memory
+- simulation as an optional stress-test layer, not the default worldview
+- explicit missing-input detection, provenance tracking, and quantitative checks
+
+Before drafting, the backend now creates structured report artifacts such as:
+
+- report intent analysis
+- a search plan
+- an evidence brief
+- a claim ledger
+- missing critical inputs
+- quality gates
+- a run trace
+
+The final report now separates verified facts from inference, surfaces unresolved gaps, records how search was used, and exposes the run trace and quality metadata through the existing report API.
+
 ## This Repository Variant
 
 This local implementation is **not** using Zep Cloud for graph building.
@@ -68,8 +92,30 @@ Optional auth fallback:
 3. **Simulation**: Dual-platform parallel simulation & Auto-parse prediction requirements & Dynamic temporal memory updates
    > **Tip:** Keep simulations at or below **20 rounds** to avoid hitting OpenAI/Anthropic rate limits.
 4. **Deliberation**: Debate, voting, and synthesis can run after simulation, and the resulting data is carried into report generation
-5. **Report Generation**: ReportAgent can use deliberation context and web-search-backed tool results while drafting sections
+5. **Report Generation**: The report pipeline analyzes intent, builds a search plan, assembles an evidence brief, verifies claims, runs quantitative and editorial checks, and generates a schema-driven report
 6. **Deep Interaction**: Chat with any agent in the simulated world and with ReportAgent, including clickable source links when search providers return citations
+
+## Report Reliability Notes
+
+The report engine now supports multiple report intents, including:
+
+- forecast
+- scenario analysis
+- research summary
+- due diligence
+- market landscape
+- strategy memo
+- risk assessment
+- policy or regulatory analysis
+
+Key report behaviors:
+
+- central claims are tracked in a claim ledger
+- important factual and quantitative claims trigger external search and verification
+- weak or narrow evidence is labeled instead of silently generalized
+- missing critical inputs are surfaced instead of buried
+- deterministic quantitative checks run before finalization
+- the report UI exposes intent, verification counts, quality gates, and run-trace metadata
 
 ## 🚀 Quick Start
 

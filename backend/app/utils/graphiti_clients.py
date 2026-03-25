@@ -1,20 +1,65 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from math import exp, sqrt
+from typing import Any
 
 import openai
 from graphiti_core.cross_encoder.client import CrossEncoderClient
 from graphiti_core.embedder.client import EmbedderClient
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.helpers import semaphore_gather
-from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.llm_client.client import LLMClient as GraphitiBaseLLMClient
+from graphiti_core.llm_client.config import LLMConfig, ModelSize
 from graphiti_core.llm_client.openai_client import OpenAIClient as GraphitiOpenAIClient
 from openai import AsyncOpenAI
 
 from ..config import Config
+from .llm_provider import ClaudeCliProvider, _clean_json_text
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_graphiti_response_payload(
+    payload: dict[str, Any],
+    response_model: type | None,
+) -> dict[str, Any]:
+    if response_model is None:
+        return payload
+
+    expected_fields = set(getattr(response_model, "model_fields", {}).keys())
+    if not expected_fields:
+        return payload
+
+    candidates: list[dict[str, Any]] = []
+
+    nested_attributes = payload.get("attributes")
+    if isinstance(nested_attributes, dict) and expected_fields & set(nested_attributes.keys()):
+        candidates.append(nested_attributes)
+
+    direct_subset = {
+        key: value
+        for key, value in payload.items()
+        if key in expected_fields
+    }
+    if direct_subset:
+        candidates.append(direct_subset)
+
+    candidates.append(payload)
+
+    for candidate in candidates:
+        try:
+            validated = response_model.model_validate(candidate)
+        except Exception:
+            continue
+
+        normalized = validated.model_dump(exclude_none=True)
+        if normalized or candidate == payload:
+            return normalized
+
+    return {}
 
 
 class EmbeddingSimilarityRerankerClient(CrossEncoderClient):
@@ -180,8 +225,48 @@ class CompatibleOpenAIRerankerClient(CrossEncoderClient):
         )
 
 
+class GraphitiClaudeCliClient(GraphitiBaseLLMClient):
+    def __init__(self, config: LLMConfig | None = None):
+        super().__init__(config=config)
+        self.provider = ClaudeCliProvider(model=self.model or Config.ANTHROPIC_MODEL_NAME)
+
+    async def _generate_response(
+        self,
+        messages,
+        response_model=None,
+        max_tokens: int = 16384,
+        model_size: ModelSize = ModelSize.medium,
+    ) -> dict[str, object]:
+        provider_messages = [
+            {"role": message.role, "content": message.content}
+            for message in messages
+        ]
+
+        response = await asyncio.to_thread(
+            self.provider.chat,
+            provider_messages,
+            self.temperature,
+            max_tokens,
+            None,
+            (
+                {"type": "json_schema", "schema": response_model.model_json_schema()}
+                if response_model is not None
+                else {"type": "json_object"}
+            ),
+        )
+
+        payload = json.loads(_clean_json_text(response.content) or "{}")
+        return _normalize_graphiti_response_payload(payload, response_model)
+
+
 def create_graphiti_llm_client():
     if Config.GRAPHITI_LLM_PROVIDER == 'anthropic':
+        if Config.use_claude_cli_for_anthropic():
+            return GraphitiClaudeCliClient(
+                config=LLMConfig(
+                    model=Config.get_graphiti_llm_model(),
+                )
+            )
         from graphiti_core.llm_client.anthropic_client import AnthropicClient as GraphitiAnthropicClient
         return GraphitiAnthropicClient(
             config=LLMConfig(

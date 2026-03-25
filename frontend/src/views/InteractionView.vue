@@ -52,6 +52,7 @@
         <Step5Interaction
           :reportId="currentReportId"
           :simulationId="simulationId"
+          :reportMeta="reportMeta"
           :systemLogs="systemLogs"
           @add-log="addLog"
           @update-status="updateStatus"
@@ -84,6 +85,7 @@ const viewMode = ref('workbench')
 // Data State
 const currentReportId = ref(route.params.reportId)
 const simulationId = ref(null)
+const reportMeta = ref(null)
 const projectData = ref(null)
 const graphData = ref(null)
 const graphLoading = ref(false)
@@ -146,6 +148,7 @@ const loadReportData = async () => {
     const reportRes = await getReport(currentReportId.value)
     if (reportRes.success && reportRes.data) {
       const reportData = reportRes.data
+      reportMeta.value = reportData
       simulationId.value = reportData.simulation_id
 
       if (simulationId.value) {

@@ -287,7 +287,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   startSimulation,
   stopSimulation,
@@ -295,7 +295,7 @@ import {
   getRunStatusDetail
 } from '../api/simulation'
 import { generateReport } from '../api/report'
-import { createDeliberation } from '../api/deliberation'
+import { createDeliberation, getBySimulation } from '../api/deliberation'
 
 const props = defineProps({
   simulationId: String,
@@ -311,6 +311,7 @@ const props = defineProps({
 
 const emit = defineEmits(['go-back', 'next-step', 'add-log', 'update-status'])
 
+const route = useRoute()
 const router = useRouter()
 
 // State
@@ -347,6 +348,35 @@ const formatElapsedTime = (currentRound) => {
   const hours = Math.floor(totalMinutes / 60)
   const minutes = totalMinutes % 60
   return `${hours}h ${minutes}m`
+}
+
+const getPreservedDeliberationSessionId = () => {
+  const value = route.query.deliberationSessionId
+  if (Array.isArray(value)) return value[0] || ''
+  return typeof value === 'string' ? value : ''
+}
+
+const getActionId = (action) => {
+  return action.id || `${action.timestamp}-${action.platform}-${action.agent_id}-${action.action_type}`
+}
+
+const mergeServerActions = (serverActions, replaceExisting = false) => {
+  if (replaceExisting) {
+    allActions.value = []
+    actionIds.value = new Set()
+  }
+
+  serverActions.forEach(action => {
+    const actionId = getActionId(action)
+
+    if (!actionIds.value.has(actionId)) {
+      actionIds.value.add(actionId)
+      allActions.value.push({
+        ...action,
+        _uniqueId: actionId
+      })
+    }
+  })
 }
 
 // Simulated elapsed time for the Twitter platform
@@ -433,6 +463,51 @@ const doStartSimulation = async () => {
     emit('update-status', 'error')
   } finally {
     isStarting.value = false
+  }
+}
+
+const restoreSimulationState = async () => {
+  if (!props.simulationId) {
+    addLog('Error: missing simulationId')
+    return
+  }
+
+  resetAllState()
+  addLog('Restoring completed simulation state...')
+
+  try {
+    const statusRes = await getRunStatus(props.simulationId)
+
+    if (statusRes.success && statusRes.data) {
+      runStatus.value = statusRes.data
+
+      const isCompleted = statusRes.data.runner_status === 'completed' || statusRes.data.runner_status === 'stopped'
+      const platformsCompleted = checkPlatformsCompleted(statusRes.data)
+
+      phase.value = isCompleted || platformsCompleted ? 2 : 1
+      emit('update-status', phase.value === 2 ? 'completed' : 'processing')
+
+      if (phase.value === 1) {
+        startStatusPolling()
+        startDetailPolling()
+      }
+    } else {
+      phase.value = 2
+      emit('update-status', 'completed')
+    }
+  } catch (err) {
+    addLog(`Could not restore simulation summary: ${err.message}`)
+    phase.value = 2
+    emit('update-status', 'completed')
+  }
+
+  try {
+    const detailRes = await getRunStatusDetail(props.simulationId)
+    if (detailRes.success && detailRes.data) {
+      mergeServerActions(detailRes.data.all_actions || [], true)
+    }
+  } catch (err) {
+    addLog(`Could not restore simulation timeline: ${err.message}`)
   }
 }
 
@@ -572,25 +647,8 @@ const fetchRunStatusDetail = async () => {
     const res = await getRunStatusDetail(props.simulationId)
     
     if (res.success && res.data) {
-      // Use all_actions to get the full action list
-      const serverActions = res.data.all_actions || []
+      mergeServerActions(res.data.all_actions || [])
 
-      // Incrementally add new actions (deduplication)
-      let newActionsAdded = 0
-      serverActions.forEach(action => {
-        // Generate unique ID
-        const actionId = action.id || `${action.timestamp}-${action.platform}-${action.agent_id}-${action.action_type}`
-        
-        if (!actionIds.value.has(actionId)) {
-          actionIds.value.add(actionId)
-          allActions.value.push({
-            ...action,
-            _uniqueId: actionId
-          })
-          newActionsAdded++
-        }
-      })
-      
       // Do not auto-scroll; let users freely browse the timeline
       // New actions are appended at the bottom
     }
@@ -692,9 +750,32 @@ const handleDeliberation = async () => {
   }
 
   isCreatingDeliberation.value = true
-  addLog('Creating deliberation session...')
+  addLog('Opening deliberation session...')
 
   try {
+    const preservedSessionId = getPreservedDeliberationSessionId()
+    if (preservedSessionId) {
+      addLog(`Reopening deliberation session: ${preservedSessionId}`)
+      router.push({ name: 'Deliberation', params: { sessionId: preservedSessionId } })
+      return
+    }
+
+    try {
+      const existingSession = await getBySimulation(props.simulationId)
+      const existingSessionId = existingSession.data?.session_id
+
+      if (existingSessionId) {
+        addLog(`Reopening deliberation session: ${existingSessionId}`)
+        router.push({ name: 'Deliberation', params: { sessionId: existingSessionId } })
+        return
+      }
+    } catch (err) {
+      if (err.response?.status !== 404) {
+        throw err
+      }
+    }
+
+    addLog('Creating deliberation session...')
     const graphId = props.graphData?.graph_id || props.projectData?.graph_id || ''
     const topic = props.projectData?.simulation_requirement || 'Simulation analysis'
 
@@ -721,7 +802,11 @@ const handleDeliberation = async () => {
 onMounted(() => {
   addLog('Step3 Simulation Run Initialising')
   if (props.simulationId) {
-    doStartSimulation()
+    if (getPreservedDeliberationSessionId()) {
+      restoreSimulationState()
+    } else {
+      doStartSimulation()
+    }
   }
 })
 
@@ -747,6 +832,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   border-bottom: 1px solid #EAEAEA;
   z-index: 10;
   min-height: 64px;
@@ -756,14 +842,21 @@ onUnmounted(() => {
 
 .action-controls {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex-shrink: 0;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 12px;
+  flex: 1 1 420px;
+  width: min(100%, 520px);
+  min-width: 0;
+  margin-left: auto;
 }
 
 .status-group {
   display: flex;
   gap: 12px;
+  flex: 1 1 520px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 /* Platform Status Cards */
@@ -777,7 +870,8 @@ onUnmounted(() => {
   border: 1px solid #EAEAEA;
   opacity: 0.7;
   transition: all 0.3s;
-  min-width: 140px;
+  min-width: 0;
+  flex: 1 1 220px;
   position: relative;
   cursor: pointer;
 }
@@ -914,12 +1008,13 @@ onUnmounted(() => {
 /* Action Button */
 .action-btn {
   display: inline-flex;
+  flex: 1 1 0;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 3px 5px;
-  font-size: 8px;
-  white-space: nowrap;
+  padding: 6px 10px;
+  font-size: 10px;
+  white-space: normal;
   font-weight: 600;
   border: none;
   border-radius: 4px;
@@ -927,8 +1022,9 @@ onUnmounted(() => {
   transition: all 0.2s ease;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  min-width: 170px;
-  min-height: 28px;
+  min-width: 0;
+  min-height: 40px;
+  width: auto;
 }
 
 .action-btn-content {
@@ -943,6 +1039,7 @@ onUnmounted(() => {
 .action-btn-label {
   min-width: 0;
   text-align: center;
+  line-height: 1.2;
 }
 
 .action-btn.secondary {
@@ -968,6 +1065,36 @@ onUnmounted(() => {
 .action-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+@media (max-width: 1200px) {
+  .control-bar {
+    align-items: stretch;
+  }
+
+  .action-controls {
+    flex: 1 1 100%;
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .control-bar {
+    padding: 12px 16px;
+  }
+
+  .action-controls {
+    flex-direction: column;
+  }
+
+  .status-group {
+    flex-direction: column;
+  }
+
+  .platform-stats {
+    flex-wrap: wrap;
+  }
 }
 
 /* --- Main Content Area --- */

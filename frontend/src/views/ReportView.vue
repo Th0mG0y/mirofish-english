@@ -5,20 +5,6 @@
       <div class="header-left">
         <div class="brand" @click="router.push('/')">MIROFISH</div>
       </div>
-      
-      <div class="header-center">
-        <div class="view-switcher">
-          <button 
-            v-for="mode in ['graph', 'split', 'workbench']" 
-            :key="mode"
-            class="switch-btn"
-            :class="{ active: viewMode === mode }"
-            @click="viewMode = mode"
-          >
-            {{ { graph: 'Graph', split: 'Split', workbench: 'Workbench' }[mode] }}
-          </button>
-        </div>
-      </div>
 
       <div class="header-right">
         <div class="workflow-step">
@@ -35,23 +21,11 @@
 
     <!-- Main Content Area -->
     <main class="content-area">
-      <!-- Left Panel: Graph -->
-      <div class="panel-wrapper left" :style="leftPanelStyle">
-        <GraphPanel 
-          :graphData="graphData"
-          :loading="graphLoading"
-          :currentPhase="4"
-          :isSimulating="false"
-          @refresh="refreshGraph"
-          @toggle-maximize="toggleMaximize('graph')"
-        />
-      </div>
-
-      <!-- Right Panel: Step 4 - Report Generation -->
-      <div class="panel-wrapper right" :style="rightPanelStyle">
+      <div class="report-panel">
         <Step4Report
           :reportId="currentReportId"
           :simulationId="simulationId"
+          :reportMeta="reportMeta"
           :systemLogs="systemLogs"
           @add-log="addLog"
           @update-status="updateStatus"
@@ -62,12 +36,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import GraphPanel from '../components/GraphPanel.vue'
 import Step4Report from '../components/Step4Report.vue'
-import { getProject, getGraphData } from '../api/graph'
-import { getSimulation } from '../api/simulation'
 import { getReport } from '../api/report'
 
 const route = useRoute()
@@ -78,30 +49,13 @@ const props = defineProps({
   reportId: String
 })
 
-// Layout State - default to workbench view
-const viewMode = ref('workbench')
-
 // Data State
 const currentReportId = ref(route.params.reportId)
 const simulationId = ref(null)
-const projectData = ref(null)
-const graphData = ref(null)
-const graphLoading = ref(false)
+const reportMeta = ref(null)
 const systemLogs = ref([])
 const currentStatus = ref('processing') // processing | completed | error
-
-// --- Computed Layout Styles ---
-const leftPanelStyle = computed(() => {
-  if (viewMode.value === 'graph') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'workbench') return { width: '0%', opacity: 0, transform: 'translateX(-20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
-})
-
-const rightPanelStyle = computed(() => {
-  if (viewMode.value === 'workbench') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'graph') return { width: '0%', opacity: 0, transform: 'translateX(20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
-})
+let reportPollTimer = null
 
 // --- Status Computed ---
 const statusClass = computed(() => {
@@ -127,13 +81,42 @@ const updateStatus = (status) => {
   currentStatus.value = status
 }
 
-// --- Layout Methods ---
-const toggleMaximize = (target) => {
-  if (viewMode.value === target) {
-    viewMode.value = 'split'
+const syncStatusFromReport = (reportData) => {
+  const reportStatus = reportData?.status
+  if (reportStatus === 'completed') {
+    currentStatus.value = 'completed'
+  } else if (reportStatus === 'failed') {
+    currentStatus.value = 'error'
   } else {
-    viewMode.value = target
+    currentStatus.value = 'processing'
   }
+}
+
+const stopReportPolling = () => {
+  if (reportPollTimer) {
+    clearInterval(reportPollTimer)
+    reportPollTimer = null
+  }
+}
+
+const startReportPolling = () => {
+  if (reportPollTimer) return
+  reportPollTimer = setInterval(async () => {
+    if (!currentReportId.value) return
+    try {
+      const reportRes = await getReport(currentReportId.value)
+      if (reportRes.success && reportRes.data) {
+        reportMeta.value = reportRes.data
+        simulationId.value = reportRes.data.simulation_id
+        syncStatusFromReport(reportRes.data)
+        if (reportRes.data.status === 'completed' || reportRes.data.status === 'failed') {
+          stopReportPolling()
+        }
+      }
+    } catch {
+      // Keep polling quietly; Step4Report handles the visible progress UI.
+    }
+  }, 3000)
 }
 
 // --- Data Logic ---
@@ -145,28 +128,13 @@ const loadReportData = async () => {
     const reportRes = await getReport(currentReportId.value)
     if (reportRes.success && reportRes.data) {
       const reportData = reportRes.data
+      reportMeta.value = reportData
       simulationId.value = reportData.simulation_id
-
-      if (simulationId.value) {
-        // Get simulation info
-        const simRes = await getSimulation(simulationId.value)
-        if (simRes.success && simRes.data) {
-          const simData = simRes.data
-
-          // Get project info
-          if (simData.project_id) {
-            const projRes = await getProject(simData.project_id)
-            if (projRes.success && projRes.data) {
-              projectData.value = projRes.data
-              addLog(`Project loaded successfully: ${projRes.data.project_id}`)
-
-              // Get graph data
-              if (projRes.data.graph_id) {
-                await loadGraph(projRes.data.graph_id)
-              }
-            }
-          }
-        }
+      syncStatusFromReport(reportData)
+      if (reportData.status !== 'completed' && reportData.status !== 'failed') {
+        startReportPolling()
+      } else {
+        stopReportPolling()
       }
     } else {
       addLog(`Failed to get report info: ${reportRes.error || 'unknown error'}`)
@@ -176,32 +144,11 @@ const loadReportData = async () => {
   }
 }
 
-const loadGraph = async (graphId) => {
-  graphLoading.value = true
-
-  try {
-    const res = await getGraphData(graphId)
-    if (res.success) {
-      graphData.value = res.data
-      addLog('Graph data loaded successfully')
-    }
-  } catch (err) {
-    addLog(`Failed to load graph: ${err.message}`)
-  } finally {
-    graphLoading.value = false
-  }
-}
-
-const refreshGraph = () => {
-  if (projectData.value?.graph_id) {
-    loadGraph(projectData.value.graph_id)
-  }
-}
-
 // Watch route params
 watch(() => route.params.reportId, (newId) => {
   if (newId && newId !== currentReportId.value) {
     currentReportId.value = newId
+    stopReportPolling()
     loadReportData()
   }
 }, { immediate: true })
@@ -209,6 +156,10 @@ watch(() => route.params.reportId, (newId) => {
 onMounted(() => {
   addLog('ReportView initialized')
   loadReportData()
+})
+
+onUnmounted(() => {
+  stopReportPolling()
 })
 </script>
 
@@ -235,44 +186,12 @@ onMounted(() => {
   position: relative;
 }
 
-.header-center {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
 .brand {
   font-family: 'JetBrains Mono', monospace;
   font-weight: 800;
   font-size: 18px;
   letter-spacing: 1px;
   cursor: pointer;
-}
-
-.view-switcher {
-  display: flex;
-  background: #F5F5F5;
-  padding: 4px;
-  border-radius: 6px;
-  gap: 4px;
-}
-
-.switch-btn {
-  border: none;
-  background: transparent;
-  padding: 6px 16px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #666;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.switch-btn.active {
-  background: #FFF;
-  color: #000;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
 }
 
 .header-right {
@@ -330,19 +249,13 @@ onMounted(() => {
 /* Content */
 .content-area {
   flex: 1;
-  display: flex;
   position: relative;
   overflow: hidden;
 }
 
-.panel-wrapper {
+.report-panel {
   height: 100%;
   overflow: hidden;
-  transition: width 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.3s ease, transform 0.3s ease;
-  will-change: width, opacity, transform;
-}
-
-.panel-wrapper.left {
-  border-right: 1px solid #EAEAEA;
+  width: 100%;
 }
 </style>

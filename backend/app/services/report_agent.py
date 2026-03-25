@@ -19,8 +19,31 @@ from datetime import datetime
 from enum import Enum
 
 from ..config import Config
+from ..models.project import ProjectManager
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
+from .claim_ledger import ClaimLedgerBuilder
+from .editorial_consolidator import EditorialConsolidator
+from .evidence_brief_builder import EvidenceBriefBuilder
+from .missing_input_detector import MissingInputDetector
+from .quality_gate_evaluator import QualityGateEvaluator
+from .quantitative_validator import QuantitativeValidator
+from .report_artifacts import (
+    ClaimLedgerEntry,
+    EvidenceBriefArtifact,
+    MissingCriticalInputArtifact,
+    QualityGateArtifact,
+    QuantitativeCheckArtifact,
+    ReportIntentArtifact,
+    RunTraceArtifact,
+    SearchExecutionArtifact,
+)
+from .report_intent_analyzer import ReportIntentAnalyzer
+from .report_schema_registry import ReportSchema, ReportSchemaRegistry, SchemaSection
+from .run_trace_builder import RunTraceBuilder
+from .search_plan_builder import SearchPlanBuilder
+from .search_service import SearchService
+from .verification_manager import VerificationManager
 from .zep_tools import (
     ZepToolsService, 
     SearchResult, 
@@ -399,11 +422,15 @@ class ReportSection:
     """Report section"""
     title: str
     content: str = ""
+    key: str = ""
+    description: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "title": self.title,
-            "content": self.content
+            "content": self.content,
+            "key": self.key,
+            "description": self.description,
         }
 
     def to_markdown(self, level: int = 2) -> str:
@@ -445,11 +472,21 @@ class Report:
     graph_id: str
     simulation_requirement: str
     status: ReportStatus
+    project_id: str = ""
     outline: Optional[ReportOutline] = None
     markdown_content: str = ""
     created_at: str = ""
     completed_at: str = ""
     error: Optional[str] = None
+    intent: Optional[Dict[str, Any]] = None
+    schema: Optional[Dict[str, Any]] = None
+    evidence_summary: Optional[Dict[str, Any]] = None
+    verification_summary: Optional[Dict[str, Any]] = None
+    missing_critical_inputs: List[Dict[str, Any]] = field(default_factory=list)
+    quantitative_checks: List[Dict[str, Any]] = field(default_factory=list)
+    quality_gates: List[Dict[str, Any]] = field(default_factory=list)
+    run_trace: Optional[Dict[str, Any]] = None
+    search_plan: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -457,12 +494,22 @@ class Report:
             "simulation_id": self.simulation_id,
             "graph_id": self.graph_id,
             "simulation_requirement": self.simulation_requirement,
+            "project_id": self.project_id,
             "status": self.status.value,
             "outline": self.outline.to_dict() if self.outline else None,
             "markdown_content": self.markdown_content,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
-            "error": self.error
+            "error": self.error,
+            "intent": self.intent,
+            "schema": self.schema,
+            "evidence_summary": self.evidence_summary,
+            "verification_summary": self.verification_summary,
+            "missing_critical_inputs": self.missing_critical_inputs,
+            "quantitative_checks": self.quantitative_checks,
+            "quality_gates": self.quality_gates,
+            "run_trace": self.run_trace,
+            "search_plan": self.search_plan,
         }
 
 
@@ -594,255 +641,79 @@ Retrieve the structured adversarial council outputs tied to this simulation.
 # ── Outline planning prompt ──
 
 PLAN_SYSTEM_PROMPT = """\
-You are an expert analytical research engine producing evidence-based prediction reports. You observe the behavior, speech, and interactions of every Agent in the simulation, and cross-reference findings against real-world data when available.
+You are designing an evidence-first report outline.
 
-[Core Philosophy]
-We built a simulated world and injected specific "simulation requirements" as variables. The evolution of the simulated world is a prediction of what may happen in the future. What you are observing is not "experimental data", but "a preview of the future". Your role is to analyze these results with rigorous, evidence-based reasoning.
+Choose a structure that fits the task and the available evidence.
 
-[Your Task]
-Write an "Analytical Research Report" that answers:
-1. Under the conditions we set, what happened in the simulation?
-2. How did various Agents (stakeholders, groups) react and act?
-3. What future trends, risks, and opportunities does this simulation reveal?
+Rules:
+- Do not assume the report is a prediction report.
+- Treat simulation as optional exploratory evidence unless the task is clearly forecast or scenario-oriented.
+- Prefer structures that separate verified facts, inference, missing inputs, constraints, and uncertainty.
+- Keep the outline useful for real decision-making.
 
-[Report Positioning]
-- ✅ This is an evidence-based analytical research report grounded in simulation data
-- ✅ Focus on prediction results: event trajectories, stakeholder reactions, emergent phenomena, potential risks
-- ✅ Agent speech and behavior in the simulated world is the prediction of future human group behavior
-- ❌ Not an analysis of current real-world conditions
-- ❌ Not a general opinion overview
-
-[Section Count Limit]
-- Minimum 2 sections, maximum 5 sections
-- No sub-sections needed; write complete content directly for each section
-- Content should be concise, focused on core prediction findings
-- Section structure is designed by you based on prediction results
-
-Please output the report outline in JSON format as follows:
+Return valid JSON:
 {
-    "title": "Report title",
-    "summary": "Report summary (one sentence summarizing core prediction findings)",
-    "sections": [
-        {
-            "title": "Section title",
-            "description": "Section content description"
-        }
-    ]
-}
-
-Note: The sections array must have a minimum of 2 and maximum of 5 elements!"""
+  "title": "Report title",
+  "summary": "One-sentence report summary",
+  "sections": [
+    {
+      "title": "Section title",
+      "description": "Why this section exists"
+    }
+  ]
+}"""
 
 PLAN_USER_PROMPT_TEMPLATE = """\
-[Prediction Scenario Setup]
-The variable (simulation requirement) we injected into the simulated world: {simulation_requirement}
+Requirement: {simulation_requirement}
 
-[Simulated World Scale]
-- Number of entities participating in simulation: {total_nodes}
-- Number of relationships generated between entities: {total_edges}
-- Entity type distribution: {entity_types}
-- Number of active Agents: {total_entities}
-
-[Sample of Future Facts Predicted by Simulation]
+Evidence context:
+- Graph nodes: {total_nodes}
+- Graph edges: {total_edges}
+- Entity types: {entity_types}
+- Active entities: {total_entities}
+- Sample graph facts:
 {related_facts_json}
 
-Please review this future preview from a "God's-eye view":
-1. Under the conditions we set, what state did the future present?
-2. How did various groups (Agents) react and act?
-3. What future trends worth noting does this simulation reveal?
-
-Based on the prediction results, design the most appropriate report section structure.
-
-[Reminder] Report section count: minimum 2, maximum 5, content should be concise and focused on core prediction findings."""
+Design the most appropriate report structure for this task."""
 
 # ── Section generation prompt ──
 
 SECTION_SYSTEM_PROMPT_TEMPLATE = """\
-You are an analytical research engine producing evidence-based reports, currently writing a section of the report.
+You are an analytical report engine writing one section of a domain-agnostic report.
 
 Report title: {report_title}
 Report summary: {report_summary}
-Prediction scenario (simulation requirement): {simulation_requirement}
+Requirement: {simulation_requirement}
+Current section: {section_title}
 
-Current section to write: {section_title}
+Rules:
+- Use uploaded source material and externally grounded evidence as the primary anchors.
+- Use graph retrieval as structured context.
+- Use simulation only when it genuinely adds value, and never present simulation-only claims as verified facts.
+- Separate verified facts from inference.
+- State uncertainty honestly when evidence is weak, stale, narrow, or contradictory.
+- Avoid repetition with prior sections.
+- Do not use Markdown headings inside the section body; the system adds the section heading.
 
-═══════════════════════════════════════════════════════════════
-[Core Philosophy]
-═══════════════════════════════════════════════════════════════
+Tool policy:
+- Tools are optional when the supplied evidence is already sufficient.
+- If you need missing evidence, prefer web_search or fact_check for fresh external grounding.
+- Use simulation or deliberation tools only when the section explicitly needs stress-testing, stakeholder reactions, or objections.
 
-The simulated world is a preview of the future. We injected specific conditions (simulation requirements) into the simulated world,
-and the behavior and interactions of Agents in the simulation are predictions of future human group behavior.
-
-Your task is to:
-- Reveal what happened in the future under the set conditions
-- Predict how various groups (Agents) reacted and acted
-- Discover future trends, risks, and opportunities worth noting
-
-❌ Do not write as an analysis of current real-world conditions
-✅ Focus on "what will the future look like" — simulation results are the predicted future
-
-═══════════════════════════════════════════════════════════════
-[Most Important Rules - Must Follow]
-═══════════════════════════════════════════════════════════════
-
-1. [Must call tools to observe the simulated world]
-   - You are observing the future preview from a "God's-eye view"
-   - All content must come from events and Agent speech/behavior that occurred in the simulated world
-   - Prohibited from using your own knowledge to write report content
-   - Call tools at least 3 times per section (max 5 times) to observe the simulated world representing the future
-
-2. [Must cite Agents' original speech and behavior]
-   - Agents' speech and behavior are predictions of future human group behavior
-   - Use citation format in the report to display these predictions, for example:
-     > "A certain type of group will say: original content..."
-   - These citations are the core evidence of simulation predictions
-
-3. [Language consistency]
-   - The report must be written entirely in English
-   - Content returned by tools may contain mixed language expressions
-   - When citing content from tools, ensure it is presented in clear, fluent English
-   - Preserve the original meaning, ensuring natural and smooth expression
-   - This rule applies to both body text and blockquotes (> format)
-
-4. [Faithfully present prediction results]
-   - Report content must reflect simulation results in the simulated world representing the future
-   - Do not add information that does not exist in the simulation
-   - If certain information is insufficient, state it honestly
-
-5. [Cross-reference with real-world data when possible]
-   - Use the web_search tool to ground simulation predictions against real-world data
-   - Use the fact_check tool to verify key claims before presenting them as findings
-   - Include verifiable citations (URLs) when referencing real-world sources
-   - Claims derived purely from simulation without real-world verification should be flagged as [UNVERIFIED — SIMULATION-DERIVED]
-
-═══════════════════════════════════════════════════════════════
-[⚠️ Format Specifications - Extremely Important!]
-═══════════════════════════════════════════════════════════════
-
-[One section = smallest content unit]
-- Each section is the smallest block unit of the report
-- ❌ Prohibited from using any Markdown headings within sections (#, ##, ###, #### etc.)
-- ❌ Prohibited from adding the section main title at the start of content
-- ✅ Section title is automatically added by the system; you only need to write the plain body text
-- ✅ Use **bold**, paragraph breaks, quotes, and lists to organize content, but no headings
-
-[Correct example]
-```
-This section analyzes the information dissemination pattern of the event. Through deep analysis of simulation data, we find...
-
-**Initial Explosion Stage**
-
-Twitter, as the first scene of information spread, took on the core function of initial information release:
-
-> "Twitter contributed 68% of the initial voice..."
-
-**Amplification Stage**
-
-The Reddit platform further amplified the event's impact through community discussion:
-
-- Deep community engagement
-- Multi-perspective analysis
-```
-
-[Incorrect example]
-```
-## Executive Summary     ← Wrong! Do not add any headings
-### I. Initial Stage    ← Wrong! Do not use ### for sub-sections
-#### 1.1 Detailed Analysis ← Wrong! Do not subdivide with ####
-
-This section analyzes...
-```
-
-═══════════════════════════════════════════════════════════════
-[Available Retrieval Tools] (Call 3-5 times per section)
-═══════════════════════════════════════════════════════════════
-
+Available tools:
 {tools_description}
 
-[Tool Usage Advice - Please mix different tools, don't use only one]
-- insight_forge: Deep insight analysis, automatically decomposes questions and retrieves facts and relationships from multiple dimensions
-- panorama_search: Wide-angle panoramic search, understand the full event picture, timeline, and evolution
-- quick_search: Quickly verify a specific information point
-- interview_agents: Interview simulation Agents, get first-person perspectives and real reactions from different roles
-- web_search: Ground simulation findings in real-world reporting and attach URLs
-- fact_check: Verify the strongest claims before presenting them as findings
-- deliberation_data: Pull debate, voting, and synthesis outputs directly when council data matters
-
-═══════════════════════════════════════════════════════════════
-[Workflow]
-═══════════════════════════════════════════════════════════════
-
-Each reply you can only do ONE of the following two things (cannot do both simultaneously):
-
-Option A - Call a tool:
-Output your thinking, then call a tool using this format:
-<tool_call>
-{{"name": "tool_name", "parameters": {{"param_name": "param_value"}}}}
-</tool_call>
-The system will execute the tool and return results to you. You do not need to and cannot write the tool return results yourself.
-
-Option B - Output final content:
-When you have obtained sufficient information through tools, output section content beginning with "Final Answer:".
-
-⚠️ Strictly prohibited:
-- Prohibited from including both tool calls and Final Answer in a single reply
-- Prohibited from fabricating tool return results (Observation); all tool results are injected by the system
-- At most one tool call per reply
-
-═══════════════════════════════════════════════════════════════
-[Section Content Requirements]
-═══════════════════════════════════════════════════════════════
-
-1. Content must be based on simulation data retrieved by tools
-2. Extensively quote original text to demonstrate simulation effects
-3. Use Markdown format (but no headings allowed):
-   - Use **bold text** to mark key points (replacing sub-headings)
-   - Use lists (- or 1.2.3.) to organize points
-   - Use blank lines to separate different paragraphs
-   - ❌ Prohibited from using any heading syntax: #, ##, ###, ####
-4. [Quotation format specifications - must stand alone as a paragraph]
-   Quotes must be independent paragraphs with one blank line before and after, cannot be mixed within paragraphs:
-
-   ✅ Correct format:
-   ```
-   The school's response was considered to lack substance.
-
-   > "The school's response pattern appeared rigid and slow in the fast-changing social media environment."
-
-   This evaluation reflects widespread public dissatisfaction.
-   ```
-
-   ❌ Incorrect format:
-   ```
-   The school's response was considered to lack substance. > "The school's response pattern..." This evaluation reflects...
-   ```
-5. Maintain logical coherence with other sections
-6. [Avoid repetition] Carefully read the completed section content below, do not repeat the same information
-7. [Reminder] Do not add any headings! Use **bold** instead of sub-section headings"""
+Reply either with one tool call or with `Final Answer:` followed by the section body."""
 
 SECTION_USER_PROMPT_TEMPLATE = """\
-Completed section content (please read carefully to avoid repetition):
+Completed section content:
 {previous_content}
 
-═══════════════════════════════════════════════════════════════
-[Current Task] Write section: {section_title}
-═══════════════════════════════════════════════════════════════
+Current section: {section_title}
 
-[Important Reminders]
-1. Carefully read the completed sections above, avoid repeating the same content!
-2. Must call tools to get simulation data before starting
-3. Please mix different tools, don't use only one type
-4. Report content must come from retrieval results, don't use your own knowledge
+Use the curated evidence context supplied below. Keep the section distinct from prior sections, do not invent unsupported claims, and do not include headings inside the body.
 
-[⚠️ Format Warning - Must Follow]
-- ❌ Do not write any headings (#, ##, ###, #### are all prohibited)
-- ❌ Do not write "{section_title}" as the beginning
-- ✅ Section title is automatically added by the system
-- ✅ Write body text directly, use **bold** instead of sub-section headings
-
-Please start:
-1. First think (Thought) about what information this section needs
-2. Then call a tool (Action) to get simulation data
-3. After collecting sufficient information, output Final Answer (plain body text, no headings)"""
+If the supplied evidence is sufficient, output `Final Answer:` directly. If evidence is missing and likely recoverable, call one tool."""
 
 # ── ReACT loop message templates ──
 
@@ -854,18 +725,18 @@ Observation (retrieval result):
 
 ═══════════════════════════════════════════════════════════════
 Tools called {tool_calls_count}/{max_tool_calls} times (used: {used_tools_str}){unused_hint}
-- If information is sufficient: output section content beginning with "Final Answer:" (must cite original text above)
+- If information is sufficient: output section content beginning with "Final Answer:"
 - If more information needed: call a tool to continue retrieval
 ═══════════════════════════════════════════════════════════════"""
 
 REACT_INSUFFICIENT_TOOLS_MSG = (
-    "[Note] You only called {tool_calls_count} tools, at least {min_tool_calls} required. "
-    "Please call more tools to get more simulation data, then output Final Answer. {unused_hint}"
+    "[Note] The section still appears under-evidenced. You called {tool_calls_count} tools and the target is {min_tool_calls}. "
+    "If you still need evidence, call another tool; otherwise finalize with explicit uncertainty. {unused_hint}"
 )
 
 REACT_INSUFFICIENT_TOOLS_MSG_ALT = (
-    "Currently only called {tool_calls_count} tools, at least {min_tool_calls} required. "
-    "Please call tools to get simulation data. {unused_hint}"
+    "The section may still need more evidence. You called {tool_calls_count} tools and the target is {min_tool_calls}. "
+    "Call another tool if needed, or finalize with clear uncertainty labeling. {unused_hint}"
 )
 
 REACT_TOOL_LIMIT_MSG = (
@@ -877,37 +748,55 @@ REACT_UNUSED_TOOLS_HINT = "\n💡 You haven't used yet: {unused_list}, suggest t
 
 REACT_FORCE_FINAL_MSG = "Tool call limit reached, please output Final Answer: directly and generate section content."
 
+SECTION_REPAIR_SYSTEM_PROMPT = """\
+You repair malformed analytical report section drafts.
+
+Rules:
+- Preserve the existing meaning unless the draft is clearly broken.
+- Do not add new facts not already present in the draft or evidence context.
+- Remove raw note fragments, orphan markdown markers, duplicate headings, and truncated endings.
+- Return only the repaired section body, with no heading and no commentary."""
+
+SECTION_REPAIR_USER_PROMPT_TEMPLATE = """\
+Section title: {section_title}
+
+Evidence context:
+{evidence_context}
+
+Draft to repair:
+{draft}
+
+Return a clean, complete section body."""
+
 # ── Chat prompt ──
 
 CHAT_SYSTEM_PROMPT_TEMPLATE = """\
-You are a concise and efficient simulation prediction assistant.
+You are a concise report intelligence assistant.
 
-[Background]
-Prediction conditions: {simulation_requirement}
+Requirement: {simulation_requirement}
 
-[Generated Analysis Report]
+Generated report:
 {report_content}
 
-[Rules]
-1. Prioritize answering questions based on the report content above
-2. Answer questions directly, avoid lengthy reasoning
-3. Only call tools to retrieve more data when the report content is insufficient to answer
-4. Answers should be concise, clear, and well-organized
-5. When using web_search or fact_check, surface the most relevant source URLs in the answer
-6. When users ask about debate, voting, or synthesis details, use deliberation_data if needed
+Rules:
+1. Prioritize answers grounded in the report and its evidence.
+2. Distinguish verified facts from inference when relevant.
+3. Only call tools when the report content is insufficient.
+4. When using web_search or fact_check, surface the most relevant source URLs.
+5. Use deliberation or simulation tools only when the question is explicitly about those artifacts.
 
-[Available Tools] (use only when needed, max 1-2 calls)
+Available tools:
 {tools_description}
 
-[Tool Call Format]
+Tool call format:
 <tool_call>
 {{"name": "tool_name", "parameters": {{"param_name": "param_value"}}}}
 </tool_call>
 
-[Answer Style]
-- Concise and direct, no lengthy discussions
-- Use > format to cite key content
-- Give conclusions first, then explain the reasoning"""
+Answer style:
+- Concise and direct
+- Conclusion first, then support
+- Mention uncertainty honestly"""
 
 CHAT_OBSERVATION_SUFFIX = "\n\nPlease answer the question concisely."
 
@@ -945,6 +834,8 @@ class ReportAgent:
         zep_tools: Optional[ZepToolsService] = None,
         deliberation_session_id: Optional[str] = None,
         include_quality_assessment: bool = True,
+        project_id: str = "",
+        search_service: Optional[SearchService] = None,
     ):
         """
         Initialize Report Agent
@@ -962,9 +853,32 @@ class ReportAgent:
         self.simulation_requirement = simulation_requirement
         self.deliberation_session_id = deliberation_session_id
         self.include_quality_assessment = include_quality_assessment
+        self.project_id = project_id
 
         self.llm = llm_client or LLMClient()
         self.zep_tools = zep_tools or ZepToolsService()
+        self.search_service = search_service or SearchService()
+        self.intent_analyzer = ReportIntentAnalyzer()
+        self.schema_registry = ReportSchemaRegistry()
+        self.search_plan_builder = SearchPlanBuilder(self.llm)
+        self.evidence_brief_builder = EvidenceBriefBuilder()
+        self.claim_ledger_builder = ClaimLedgerBuilder()
+        self.missing_input_detector = MissingInputDetector()
+        self.quantitative_validator = QuantitativeValidator()
+        self.editorial_consolidator = EditorialConsolidator()
+        self.quality_gate_evaluator = QualityGateEvaluator()
+        self.run_trace_builder = RunTraceBuilder()
+        self.verification_manager = VerificationManager(self.search_service)
+
+        self.current_intent: Optional[ReportIntentArtifact] = None
+        self.current_schema: Optional[ReportSchema] = None
+        self.current_evidence_brief: Optional[EvidenceBriefArtifact] = None
+        self.current_claim_ledger: List[ClaimLedgerEntry] = []
+        self.current_missing_inputs: List[MissingCriticalInputArtifact] = []
+        self.current_quantitative_checks: List[QuantitativeCheckArtifact] = []
+        self.current_quality_gates: List[QualityGateArtifact] = []
+        self.current_run_trace: Optional[RunTraceArtifact] = None
+        self.current_search_plan: List[Dict[str, Any]] = []
 
         # Tool definitions
         self.tools = self._define_tools()
@@ -1107,9 +1021,13 @@ class ReportAgent:
                 # Web search - ground claims in real-world data
                 query = parameters.get("query", "")
                 context = parameters.get("context", "")
-                from .search_service import SearchService
-                search_service = SearchService()
-                result = search_service.search(query=query, context=context)
+                result = self.search_service.search(
+                    query=query,
+                    context=context,
+                    intent=parameters.get("intent", "discovery"),
+                    report_question=parameters.get("report_question", self.simulation_requirement),
+                    evidence_type=parameters.get("evidence_type", "section_support"),
+                )
                 output = f"### Web Search: {query}\n\n{result.answer}\n"
                 if result.citations:
                     output += "\n**Sources:**\n"
@@ -1120,9 +1038,7 @@ class ReportAgent:
             elif tool_name == "fact_check":
                 # Fact check - verify claims against web evidence
                 claim = parameters.get("claim", "")
-                from .search_service import SearchService
-                search_service = SearchService()
-                result = search_service.fact_check(claim=claim)
+                result = self.search_service.fact_check(claim=claim)
                 output = f"### Fact Check: {claim}\n\n"
                 output += f"**Verdict:** {result.verdict} (confidence: {result.confidence:.1%})\n"
                 output += f"**Explanation:** {result.explanation}\n"
@@ -1427,6 +1343,473 @@ class ReportAgent:
                 desc_parts.append(f"  Parameters: {params_desc}")
         return "\n".join(desc_parts)
 
+    def _load_project(self):
+        if not self.project_id:
+            return None
+        return ProjectManager.get_project(self.project_id)
+
+    def _get_graph_context(self) -> Dict[str, Any]:
+        try:
+            return self.zep_tools.get_simulation_context(
+                graph_id=self.graph_id,
+                simulation_requirement=self.simulation_requirement,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to load graph context: {exc}")
+            return {}
+
+    def _get_deliberation_outputs(self) -> List[str]:
+        session = self._get_deliberation_session()
+        if not session:
+            return []
+        outputs = []
+        for rnd in session.rounds[:3]:
+            for arg in rnd.arguments[:4]:
+                outputs.append(arg.content[:400])
+        if session.synthesis:
+            outputs.append(session.synthesis[:1000])
+        return outputs[:12]
+
+    def _build_search_source_material(self, project_summary: str, extracted_text: str, graph_context: dict) -> List[Dict[str, str]]:
+        chunks: List[Dict[str, str]] = []
+        if self.simulation_requirement:
+            chunks.append({
+                "id": "requirement",
+                "label": "requirement",
+                "text": self.simulation_requirement,
+            })
+        if project_summary:
+            chunks.append({
+                "id": "project_summary",
+                "label": "project_summary",
+                "text": project_summary,
+            })
+        if extracted_text:
+            paragraphs = [part.strip() for part in re.split(r"\n\s*\n", extracted_text) if part.strip()]
+            for index, paragraph in enumerate(paragraphs[:4], start=1):
+                chunks.append({
+                    "id": f"source_document_{index}",
+                    "label": "source_document",
+                    "text": paragraph[:900],
+                })
+        for index, fact in enumerate(graph_context.get("related_facts", [])[:4], start=1):
+            fact_text = str(fact.get("fact") or fact.get("content") or fact.get("text") or fact) if isinstance(fact, dict) else str(fact)
+            if fact_text.strip():
+                chunks.append({
+                    "id": f"graph_fact_{index}",
+                    "label": "graph_fact",
+                    "text": fact_text[:600],
+                })
+        for index, output in enumerate(self._get_deliberation_outputs()[:3], start=1):
+            if output.strip():
+                chunks.append({
+                    "id": f"deliberation_{index}",
+                    "label": "deliberation",
+                    "text": output[:700],
+                })
+        return chunks
+
+    def _prepare_report_intelligence(self) -> None:
+        project = self._load_project()
+        graph_context = self._get_graph_context()
+        project_summary = getattr(project, "analysis_summary", "") if project else ""
+        extracted_text = ProjectManager.get_extracted_text(project.project_id) if project else ""
+
+        self.current_intent = self.intent_analyzer.analyze(
+            requirement=self.simulation_requirement,
+            project_summary=project_summary or "",
+            document_context=extracted_text or "",
+        )
+        self.current_schema = self.schema_registry.get_schema(self.current_intent)
+
+        search_source_material = self._build_search_source_material(
+            project_summary=project_summary or "",
+            extracted_text=extracted_text or "",
+            graph_context=graph_context,
+        )
+        search_plan_objects = self.search_plan_builder.build(
+            self.current_intent,
+            source_material=search_source_material,
+        )
+        self.current_search_plan = [query.to_dict() for query in search_plan_objects]
+
+        search_results = self.search_service.search_plan(self.current_search_plan)
+        self.current_search_plan = [
+            {**query.to_dict(), "produced_usable_evidence": result.usable_evidence, "citations_used": len(result.citations)}
+            for query, result in zip(search_plan_objects, search_results)
+        ]
+
+        simulation_outputs = []
+        if self.current_intent.simulation_mode in {"required", "optional", "useful_but_optional"}:
+            simulation_outputs = [
+                str(item) for item in graph_context.get("related_facts", [])[:8]
+            ]
+
+        self.current_evidence_brief = self.evidence_brief_builder.build(
+            project=project,
+            requirement=self.simulation_requirement,
+            graph_context=graph_context,
+            search_results=search_results,
+            simulation_outputs=simulation_outputs,
+            deliberation_outputs=self._get_deliberation_outputs(),
+        )
+        self.current_claim_ledger = self.claim_ledger_builder.build(
+            self.current_intent,
+            self.current_evidence_brief,
+            schema_sections=[section.title for section in self.current_schema.sections] if self.current_schema else [],
+        )
+        self.current_claim_ledger = self.verification_manager.verify_claims(
+            self.current_claim_ledger,
+            search_plan_objects,
+        )
+        self.current_missing_inputs = self.missing_input_detector.detect(
+            self.current_intent,
+            self.current_evidence_brief,
+            search_plan=self.current_search_plan,
+            claim_ledger=self.current_claim_ledger,
+        )
+
+    def _build_report_title_and_summary(self) -> Dict[str, str]:
+        intent = self.current_intent
+        schema = self.current_schema
+        evidence = self.current_evidence_brief
+        if not intent or not schema or not evidence:
+            return {
+                "title": "Report",
+                "summary": "Evidence-grounded analytical report.",
+            }
+
+        entity_part = evidence.key_entities[0] if evidence.key_entities else self.simulation_requirement[:60]
+        entity_part = self._clean_structured_text(entity_part) or entity_part.strip() or "Subject"
+        title = f"{schema.title_prefix}: {entity_part[:80]}"
+        verified = sum(1 for entry in self.current_claim_ledger if entry.verification_status.startswith("verified"))
+        unresolved = sum(1 for entry in self.current_claim_ledger if entry.verification_status == "unresolved")
+        report_type_label = intent.report_type.replace('_', ' ')
+        if self.current_missing_inputs:
+            top_gaps = ", ".join(item.item for item in self.current_missing_inputs[:2])
+            summary = (
+                f"Evidence-grounded {report_type_label} for {entity_part}. "
+                f"Verification remains incomplete; main gaps include {top_gaps}."
+            )
+        elif unresolved:
+            summary = (
+                f"Evidence-grounded {report_type_label} for {entity_part}. "
+                f"{unresolved} major claim(s) remain unresolved."
+            )
+        elif verified:
+            summary = f"Evidence-grounded {report_type_label} for {entity_part} with verified support for the main claims."
+        else:
+            summary = f"Evidence-grounded {report_type_label} for {entity_part}."
+        return {"title": title[:160], "summary": summary}
+
+    def _render_structured_section(self, section: ReportSection) -> str:
+        title = section.title
+        if title == "What Is Verified":
+            verified = [
+                entry for entry in self.current_claim_ledger
+                if entry.verification_status in {"verified_by_source_material", "verified_by_external_search"}
+            ]
+            if not verified:
+                return "- No claims cleared verification against directly relevant source material or external evidence."
+            return "\n".join(
+                f"- {self._clean_structured_text(entry.canonical_claim_text or entry.claim_text)} "
+                f"({entry.verification_status.replace('_', ' ')})"
+                for entry in verified[:8]
+            )
+
+        if title == "What Is Inferred":
+            inferred = [
+                entry for entry in self.current_claim_ledger
+                if entry.claim_category in {"inferred", "assumption"} or entry.verification_status == "unresolved"
+            ]
+            if not inferred:
+                return "- No major inference-only claims were tracked."
+            return "\n".join(
+                f"- {self._clean_structured_text(entry.canonical_claim_text or entry.claim_text)} ({entry.claim_category})"
+                for entry in inferred[:8]
+                if self._clean_structured_text(entry.canonical_claim_text or entry.claim_text)
+            )
+
+        if title == "Constraints and Dependencies":
+            lines = []
+            for entry in self.current_claim_ledger[:6]:
+                clean_claim = self._clean_structured_text(entry.canonical_claim_text or entry.claim_text)
+                if not clean_claim:
+                    continue
+                lines.append(f"**{clean_claim}**")
+                for label, values in [
+                    ("Enabling", entry.constraint_map.enabling_conditions),
+                    ("Limiting", entry.constraint_map.limiting_conditions),
+                    ("Platform", entry.constraint_map.platform_dependencies),
+                    ("Operational", entry.constraint_map.operational_dependencies),
+                    ("Regulatory", entry.constraint_map.regulatory_dependencies),
+                ]:
+                    if values:
+                        lines.append(f"- {label}: {', '.join(values[:3])}")
+            return "\n".join(lines) if lines else "- No major constraint maps were generated."
+
+        if title == "Missing Critical Inputs":
+            if not self.current_missing_inputs:
+                unresolved = sum(1 for entry in self.current_claim_ledger if entry.verification_status == "unresolved")
+                return (
+                    "- No explicit missing-input artifact was generated, "
+                    f"but {unresolved} unresolved claim(s) still limit confidence."
+                )
+            return "\n".join(
+                f"- **{item.item}**: {item.why_it_matters} Search attempted: {'yes' if item.search_attempted else 'no'}."
+                for item in self.current_missing_inputs
+            )
+
+        if title == "Quantitative Checks":
+            if not self.current_quantitative_checks:
+                return "- No deterministic quantitative checks were triggered."
+            return "\n".join(
+                f"- **{check.status.upper()}** {check.name}: {check.details}"
+                for check in self.current_quantitative_checks
+            )
+
+        if title == "What Would Change the Conclusion":
+            if not self.current_missing_inputs:
+                return "- A materially stronger contradictory source or new primary data would be the main trigger to change the conclusion."
+            return "\n".join(
+                f"- Better evidence on {item.item} could materially change the conclusion."
+                for item in self.current_missing_inputs[:5]
+            )
+
+        if title == "Sources":
+            evidence = self.current_evidence_brief
+            if not evidence:
+                return "- No source summary available."
+            lines = []
+            seen_links = set()
+            for document in evidence.source_documents[:5]:
+                lines.append(f"- Source document: {document.title}")
+            for item in evidence.external_evidence[:5]:
+                top_sources = item.source_quality_summary.get("top_sources", []) if item.source_quality_summary else []
+                source_candidates = top_sources or item.citations[:3]
+                for citation in source_candidates:
+                    link = citation.get("url", "")
+                    label = citation.get("title") or item.query
+                    if not link or link in seen_links:
+                        continue
+                    seen_links.add(link)
+                    lines.append(f"- External: [{label}]({link})")
+            if not lines:
+                return "- No directly relevant sources survived source-quality filtering."
+            return "\n".join(lines) if lines else "- No source summary available."
+
+        if title == "Uncertainties and Blind Spots":
+            lines = []
+            for item in self.current_missing_inputs[:5]:
+                lines.append(f"- Gap: {item.item}")
+            for gate in self.current_quality_gates:
+                if gate.status in {"warn", "fail"}:
+                    lines.append(f"- {gate.name}: {gate.summary}")
+            if not lines:
+                unresolved = sum(1 for entry in self.current_claim_ledger if entry.verification_status == "unresolved")
+                return f"- Residual uncertainty remains material because {unresolved} claim(s) remain unresolved."
+            return "\n".join(lines)
+
+        if title == "Methodology Note":
+            trace = self.current_run_trace
+            if not trace:
+                return "- Methodology trace unavailable."
+            return "\n".join([
+                f"- Primary anchor: uploaded source documents and extracted text.",
+                f"- Graph usage: {trace.graph_usage or 'structured context'}",
+                f"- Simulation used: {'yes' if trace.simulation_used else 'no'}",
+                f"- Simulation role: {trace.simulation_reason or 'not required'}",
+                f"- Web searches run: {trace.search_queries_run}",
+            ])
+
+        if title == "Run Trace":
+            trace = self.current_run_trace
+            if not trace:
+                return "- Run trace unavailable."
+            lines = [
+                f"- Source inputs used: {', '.join(trace.source_inputs_used) or 'none recorded'}",
+                f"- Simulation used: {'yes' if trace.simulation_used else 'no'}",
+                f"- Search categories: {', '.join(trace.search_categories) or 'none'}",
+                f"- Claims externally verified: {trace.externally_verified_claims}",
+                f"- Claims unresolved after search: {trace.unresolved_claims}",
+            ]
+            for gate in trace.quality_gates:
+                lines.append(f"- Quality gate `{gate.name}`: {gate.status}")
+            return "\n".join(lines)
+
+        return ""
+
+    def _clean_structured_text(self, text: str) -> str:
+        cleaned = " ".join((text or "").replace("*", " ").split()).strip()
+        if not cleaned:
+            return ""
+        if len(cleaned) < 20 and not cleaned.endswith((".", "?", "!", "%")):
+            return ""
+        if cleaned.endswith((" n't", " isn", " aspir", " n")):
+            return ""
+        return cleaned
+
+    def _section_needs_repair(self, title: str, content: str) -> bool:
+        defects = self.editorial_consolidator.review([{"title": title, "content": content}])
+        return any(defect.defect_type in {"formatting_artifact", "truncated_section"} for defect in defects)
+
+    def _finalize_section_content(
+        self,
+        section: ReportSection,
+        content: str,
+        previous_sections: List[str],
+    ) -> str:
+        cleaned = self.editorial_consolidator.clean_section_content(section.title, content)
+        draft = cleaned or (content or "").strip()
+        if not draft:
+            return ""
+
+        repair_needed = not bool(cleaned) or self._section_needs_repair(section.title, draft)
+        if not repair_needed:
+            return draft
+
+        evidence_context = self._build_section_evidence_context(section, previous_sections)
+        repair_prompt = SECTION_REPAIR_USER_PROMPT_TEMPLATE.format(
+            section_title=section.title,
+            evidence_context=evidence_context[:5000] or "(No additional evidence context available)",
+            draft=draft[:5000],
+        )
+        repaired = self.llm.chat(
+            messages=[
+                {"role": "system", "content": SECTION_REPAIR_SYSTEM_PROMPT},
+                {"role": "user", "content": repair_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=2048,
+        )
+        repaired_text = repaired or cleaned
+        if "Final Answer:" in repaired_text:
+            repaired_text = repaired_text.split("Final Answer:")[-1].strip()
+        repaired_text = self.editorial_consolidator.clean_section_content(section.title, repaired_text)
+        return repaired_text or cleaned
+
+    def _refresh_structured_sections(self, outline: ReportOutline) -> None:
+        if not self.current_schema:
+            return
+
+        structured_titles = {
+            schema_section.title
+            for schema_section in self.current_schema.sections
+            if schema_section.render_mode == "structured"
+        }
+        for section in outline.sections:
+            if section.title in structured_titles:
+                section.content = self._render_structured_section(section)
+
+    def _build_section_evidence_context(self, section: ReportSection, previous_sections: List[str]) -> str:
+        evidence = self.current_evidence_brief
+        if not evidence:
+            return ""
+
+        relevant_claims = self.claim_ledger_builder.consolidate_for_section(
+            self.current_claim_ledger,
+            section.title,
+            prior_sections=previous_sections,
+        )
+        if not relevant_claims:
+            relevant_claims = self.claim_ledger_builder.filter_for_section(self.current_claim_ledger, section.title)
+        context_parts = [
+            "\n\n[Curated Evidence Context]",
+            f"Report intent: {self.current_intent.report_type if self.current_intent else 'unknown'}",
+            f"Simulation mode: {self.current_intent.simulation_mode if self.current_intent else 'unknown'}",
+            "Use only the claim clusters listed below unless you explicitly search for more evidence.",
+            "Do not restate the same underlying graph fact with slightly different wording across sections.",
+            "",
+            "Key entities:",
+            ", ".join(evidence.key_entities[:10]) or "None",
+            "",
+            "Claim ledger entries:",
+        ]
+        for entry in relevant_claims[:8]:
+            context_parts.append(
+                f"- Canonical claim: {entry.canonical_claim_text or entry.claim_text} | cluster: {entry.cluster_id} | "
+                f"primary section: {entry.primary_section or section.title} | duplicates consolidated: {entry.duplicate_count} | "
+                f"verification: {entry.verification_status} | provenance: {', '.join(entry.source_provenance)}"
+            )
+            if entry.supporting_evidence:
+                context_parts.append(f"  Evidence anchors: {'; '.join(entry.supporting_evidence[:2])}")
+
+        if evidence.key_numbers:
+            context_parts.extend(["", "Key numbers:"])
+            context_parts.extend(f"- {item}" for item in evidence.key_numbers[:10])
+
+        if evidence.contradictions:
+            context_parts.extend(["", "Known contradictions:"])
+            context_parts.extend(f"- {item}" for item in evidence.contradictions[:5])
+
+        if self.current_missing_inputs:
+            context_parts.extend(["", "Missing critical inputs:"])
+            context_parts.extend(f"- {item.item}" for item in self.current_missing_inputs[:5])
+
+        if evidence.external_evidence:
+            context_parts.extend(["", "External evidence summary:"])
+            for item in evidence.external_evidence[:4]:
+                context_parts.append(f"- {item.query}: {item.answer[:240]}")
+
+        return "\n".join(context_parts)
+
+    def _build_verification_summary(self) -> Dict[str, Any]:
+        statuses: Dict[str, int] = {}
+        for entry in self.current_claim_ledger:
+            statuses[entry.verification_status] = statuses.get(entry.verification_status, 0) + 1
+
+        release_recommendation = "pass"
+        if any(gate.status == "fail" and gate.blocking for gate in self.current_quality_gates):
+            release_recommendation = "fail"
+        elif any(gate.status == "warn" for gate in self.current_quality_gates):
+            release_recommendation = "warn"
+
+        return {
+            "status_counts": statuses,
+            "release_recommendation": release_recommendation,
+            "verified_claims": sum(
+                1 for entry in self.current_claim_ledger
+                if entry.verification_status in {"verified_by_source_material", "verified_by_external_search"}
+            ),
+            "unresolved_claims": sum(1 for entry in self.current_claim_ledger if entry.verification_status == "unresolved"),
+        }
+
+    def _save_pipeline_artifacts(self, report_id: str) -> None:
+        if self.current_intent:
+            ReportManager.save_artifact(report_id, "intent", self.current_intent.to_dict())
+        if self.current_schema:
+            ReportManager.save_artifact(report_id, "schema", self.current_schema.to_dict())
+        if self.current_search_plan:
+            ReportManager.save_artifact(report_id, "search_plan", self.current_search_plan)
+        if self.current_evidence_brief:
+            ReportManager.save_artifact(report_id, "evidence_brief", self.current_evidence_brief.to_dict())
+        if self.current_claim_ledger:
+            ReportManager.save_artifact(
+                report_id,
+                "claim_ledger",
+                [entry.to_dict() for entry in self.current_claim_ledger],
+            )
+        if self.current_missing_inputs:
+            ReportManager.save_artifact(
+                report_id,
+                "missing_inputs",
+                [item.to_dict() for item in self.current_missing_inputs],
+            )
+        if self.current_quantitative_checks:
+            ReportManager.save_artifact(
+                report_id,
+                "quantitative_checks",
+                [check.to_dict() for check in self.current_quantitative_checks],
+            )
+        if self.current_quality_gates:
+            ReportManager.save_artifact(
+                report_id,
+                "quality_gates",
+                [gate.to_dict() for gate in self.current_quality_gates],
+            )
+        if self.current_run_trace:
+            ReportManager.save_artifact(report_id, "run_trace", self.current_run_trace.to_dict())
+
     def plan_outline(
         self,
         progress_callback: Optional[Callable] = None
@@ -1444,98 +1827,34 @@ class ReportAgent:
         """
         logger.info("Starting to plan report outline...")
 
+        if not self.current_intent or not self.current_schema or not self.current_evidence_brief:
+            self._prepare_report_intelligence()
+
         if progress_callback:
-            progress_callback("planning", 0, "Analyzing simulation requirements...")
+            progress_callback("planning", 0, "Analyzing report intent and evidence...")
 
-        # First get simulation context
-        context = self.zep_tools.get_simulation_context(
-            graph_id=self.graph_id,
-            simulation_requirement=self.simulation_requirement
+        title_summary = self._build_report_title_and_summary()
+        sections = [
+            ReportSection(
+                title=schema_section.title,
+                content="",
+                key=schema_section.key,
+                description=schema_section.description,
+            )
+            for schema_section in self.current_schema.sections
+        ]
+
+        outline = ReportOutline(
+            title=title_summary["title"],
+            summary=title_summary["summary"],
+            sections=sections,
         )
-        
+
         if progress_callback:
-            progress_callback("planning", 30, "Generating report outline...")
-        
-        system_prompt = PLAN_SYSTEM_PROMPT
-        user_prompt = PLAN_USER_PROMPT_TEMPLATE.format(
-            simulation_requirement=self.simulation_requirement,
-            total_nodes=context.get('graph_statistics', {}).get('total_nodes', 0),
-            total_edges=context.get('graph_statistics', {}).get('total_edges', 0),
-            entity_types=list(context.get('graph_statistics', {}).get('entity_types', {}).keys()),
-            total_entities=context.get('total_entities', 0),
-            related_facts_json=json.dumps(context.get('related_facts', [])[:10], ensure_ascii=False, indent=2),
-        )
+            progress_callback("planning", 100, "Outline planning complete")
 
-        # Append deliberation context if available
-        if self.deliberation_session_id or self._get_deliberation_session():
-            try:
-                delib_session = self._get_deliberation_session()
-                if delib_session:
-                    delib_context = "\n\n[Adversarial Council Deliberation]\n"
-                    delib_context += f"Topic: {delib_session.topic}\n"
-                    delib_context += f"Rounds: {len(delib_session.rounds)}\n"
-                    for rnd in delib_session.rounds:
-                        delib_context += f"\n--- Round {rnd.round_number} ---\n"
-                        for arg in rnd.arguments:
-                            label = "OPTIMIST" if arg.position == "optimist" else "PESSIMIST"
-                            delib_context += f"[{label}] {arg.content[:300]}\n"
-                    if delib_session.vote_results:
-                        delib_context += "\n[Voting Results]\n"
-                        for dim_name, dim_data in delib_session.vote_results.get("dimensions", {}).items():
-                            pct = dim_data.get("raw_percentage", {})
-                            delib_context += f"  {dim_name}: A={pct.get('position_a', 0)}%, B={pct.get('position_b', 0)}%, Neither={pct.get('neither', 0)}%\n"
-                    if delib_session.synthesis:
-                        delib_context += f"\n[Synthesis]\n{delib_session.synthesis[:1000]}\n"
-                    delib_context += "\nPlease include sections covering: Council Deliberation Analysis, Voting Results & Consensus, and Conditional Forecasts (if contested zones exist)."
-                    user_prompt += delib_context
-                    logger.info(f"Deliberation context added to report planning: {self.deliberation_session_id}")
-            except Exception as e:
-                logger.warning(f"Failed to load deliberation context: {e}")
-
-        try:
-            response = self.llm.chat_json(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3
-            )
-            
-            if progress_callback:
-                progress_callback("planning", 80, "Parsing outline structure...")
-
-            # Parse outline
-            sections = []
-            for section_data in response.get("sections", []):
-                sections.append(ReportSection(
-                    title=section_data.get("title", ""),
-                    content=""
-                ))
-
-            outline = ReportOutline(
-                title=response.get("title", "Simulation Analysis Report"),
-                summary=response.get("summary", ""),
-                sections=sections
-            )
-
-            if progress_callback:
-                progress_callback("planning", 100, "Outline planning complete")
-
-            logger.info(f"Outline planning complete: {len(sections)} sections")
-            return outline
-
-        except Exception as e:
-            logger.error(f"Outline planning failed: {str(e)}")
-            # Return default outline (3 sections, as fallback)
-            return ReportOutline(
-                title="Future Prediction Report",
-                summary="Analysis of future trends and risks based on simulation predictions",
-                sections=[
-                    ReportSection(title="Prediction Scenario and Core Findings"),
-                    ReportSection(title="Group Behavior Prediction Analysis"),
-                    ReportSection(title="Trend Outlook and Risk Alerts")
-                ]
-            )
+        logger.info(f"Outline planning complete: {len(sections)} sections")
+        return outline
     
     def _generate_section_react(
         self, 
@@ -1570,6 +1889,28 @@ class ReportAgent:
         # Log section start
         if self.report_logger:
             self.report_logger.log_section_start(section.title, section_index)
+
+        if section.key in {
+            "verified",
+            "inferred",
+            "constraints",
+            "missing_inputs",
+            "quant_checks",
+            "what_changes",
+            "sources",
+            "uncertainties",
+            "methodology",
+            "run_trace",
+        }:
+            content = self._render_structured_section(section)
+            if self.report_logger:
+                self.report_logger.log_section_content(
+                    section_title=section.title,
+                    section_index=section_index,
+                    content=content,
+                    tool_calls_count=0,
+                )
+            return content
         
         system_prompt = SECTION_SYSTEM_PROMPT_TEMPLATE.format(
             report_title=outline.title,
@@ -1594,6 +1935,7 @@ class ReportAgent:
             previous_content=previous_content,
             section_title=section.title,
         )
+        user_prompt += self._build_section_evidence_context(section, previous_sections)
 
         # Inject deliberation context for sections that need it
         if self.deliberation_session_id or self._get_deliberation_session():
@@ -1609,7 +1951,11 @@ class ReportAgent:
         # ReACT loop
         tool_calls_count = 0
         max_iterations = 5  # Maximum iterations
-        min_tool_calls = 3  # Minimum tool calls required
+        min_tool_calls = 0
+        if self.current_intent and self.current_intent.fresh_external_information_required:
+            min_tool_calls = 1
+        if self.current_intent and self.current_intent.simulation_mode == "required":
+            min_tool_calls = 2
         conflict_retries = 0  # Number of consecutive conflicts where tool call and Final Answer appeared simultaneously
         used_tools = set()  # Track tools already called
         all_tools = {
@@ -1623,7 +1969,11 @@ class ReportAgent:
         }
 
         # Report context, used for InsightForge sub-question generation
-        report_context = f"Section title: {section.title}\nSimulation requirement: {self.simulation_requirement}"
+        report_context = (
+            f"Section title: {section.title}\n"
+            f"Simulation requirement: {self.simulation_requirement}\n"
+            f"Intent: {self.current_intent.report_type if self.current_intent else 'unknown'}"
+        )
         
         for iteration in range(max_iterations):
             if progress_callback:
@@ -1724,6 +2074,7 @@ class ReportAgent:
 
                 # Normal completion
                 final_answer = response.split("Final Answer:")[-1].strip()
+                final_answer = self._finalize_section_content(section, final_answer, previous_sections)
                 logger.info(f"Section {section.title} generation complete (tool calls: {tool_calls_count})")
 
                 if self.report_logger:
@@ -1822,7 +2173,7 @@ class ReportAgent:
             # Tool calls sufficient, LLM output content without "Final Answer:" prefix
             # Directly accept this content as the final answer, no need for additional iterations
             logger.info(f"Section {section.title}: 'Final Answer:' prefix not detected, directly accepting LLM output as final content (tool calls: {tool_calls_count})")
-            final_answer = response.strip()
+            final_answer = self._finalize_section_content(section, response.strip(), previous_sections)
 
             if self.report_logger:
                 self.report_logger.log_section_content(
@@ -1851,6 +2202,7 @@ class ReportAgent:
             final_answer = response.split("Final Answer:")[-1].strip()
         else:
             final_answer = response
+        final_answer = self._finalize_section_content(section, final_answer, previous_sections)
         
         # Log section content generation complete
         if self.report_logger:
@@ -1891,247 +2243,270 @@ class ReportAgent:
         """
         import uuid
 
-        # If no report_id provided, auto-generate one
         if not report_id:
             report_id = f"report_{uuid.uuid4().hex[:12]}"
         start_time = datetime.now()
-        
+
         report = Report(
             report_id=report_id,
             simulation_id=self.simulation_id,
             graph_id=self.graph_id,
             simulation_requirement=self.simulation_requirement,
+            project_id=self.project_id,
             status=ReportStatus.PENDING,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now().isoformat(),
         )
-        
-        # List of completed section titles (for progress tracking)
-        completed_section_titles = []
+
+        completed_section_titles: List[str] = []
 
         try:
-            # Initialize: create report folder and save initial state
             ReportManager._ensure_report_folder(report_id)
 
-            # Initialize logger (structured log agent_log.jsonl)
             self.report_logger = ReportLogger(report_id)
             self.report_logger.log_start(
                 simulation_id=self.simulation_id,
                 graph_id=self.graph_id,
-                simulation_requirement=self.simulation_requirement
+                simulation_requirement=self.simulation_requirement,
             )
-
-            # Initialize console logger (console_log.txt)
             self.console_logger = ReportConsoleLogger(report_id)
 
             ReportManager.update_progress(
-                report_id, "pending", 0, "Initializing report...",
-                completed_sections=[]
+                report_id,
+                "pending",
+                0,
+                "Initializing report intelligence pipeline...",
+                completed_sections=[],
             )
             ReportManager.save_report(report)
 
-            # Phase 1: Plan outline
             report.status = ReportStatus.PLANNING
-            ReportManager.update_progress(
-                report_id, "planning", 5, "Starting report outline planning...",
-                completed_sections=[]
-            )
-
-            # Log planning start
             self.report_logger.log_planning_start()
-
             if progress_callback:
-                progress_callback("planning", 0, "Starting report outline planning...")
+                progress_callback("planning", 0, "Analyzing report intent and evidence...")
+
+            self._prepare_report_intelligence()
+            self._save_pipeline_artifacts(report_id)
+
+            report.intent = self.current_intent.to_dict() if self.current_intent else None
+            report.schema = self.current_schema.to_dict() if self.current_schema else None
+            report.evidence_summary = self.current_evidence_brief.to_dict() if self.current_evidence_brief else None
+            report.search_plan = self.current_search_plan
+            report.missing_critical_inputs = [item.to_dict() for item in self.current_missing_inputs]
+
+            if self.report_logger:
+                self.report_logger.log(
+                    action="intent_analysis_complete",
+                    stage="planning",
+                    details={
+                        "intent": report.intent,
+                        "search_plan": report.search_plan,
+                        "missing_critical_inputs": report.missing_critical_inputs,
+                    },
+                )
+
+            ReportManager.update_progress(
+                report_id,
+                "planning",
+                10,
+                "Intent analysis, search plan, and evidence brief complete",
+                completed_sections=[],
+            )
+            ReportManager.save_report(report)
 
             outline = self.plan_outline(
                 progress_callback=lambda stage, prog, msg:
-                    progress_callback(stage, prog // 5, msg) if progress_callback else None
+                    progress_callback(stage, prog, msg) if progress_callback else None
             )
             report.outline = outline
+            if self.report_logger:
+                self.report_logger.log_planning_complete(outline.to_dict())
 
-            # Log planning complete
-            self.report_logger.log_planning_complete(outline.to_dict())
-
-            # Save outline to file
             ReportManager.save_outline(report_id, outline)
             ReportManager.update_progress(
-                report_id, "planning", 15, f"Outline planning complete, {len(outline.sections)} sections",
-                completed_sections=[]
+                report_id,
+                "planning",
+                18,
+                f"Outline planning complete, {len(outline.sections)} sections",
+                completed_sections=[],
             )
             ReportManager.save_report(report)
 
-            logger.info(f"Outline saved to file: {report_id}/outline.json")
-
-            # Phase 2: Generate sections one by one (save each section)
             report.status = ReportStatus.GENERATING
-
             total_sections = len(outline.sections)
-            generated_sections = []  # Store content for context
+            generated_sections: List[str] = []
 
             for i, section in enumerate(outline.sections):
                 section_num = i + 1
-                base_progress = 20 + int((i / total_sections) * 70)
+                base_progress = 20 + int((i / max(total_sections, 1)) * 60)
 
-                # Update progress
                 ReportManager.update_progress(
-                    report_id, "generating", base_progress,
+                    report_id,
+                    "generating",
+                    base_progress,
                     f"Generating section: {section.title} ({section_num}/{total_sections})",
                     current_section=section.title,
-                    completed_sections=completed_section_titles
+                    completed_sections=completed_section_titles,
                 )
 
                 if progress_callback:
                     progress_callback(
                         "generating",
                         base_progress,
-                        f"Generating section: {section.title} ({section_num}/{total_sections})"
+                        f"Generating section: {section.title} ({section_num}/{total_sections})",
                     )
 
-                # Generate main section content
                 section_content = self._generate_section_react(
                     section=section,
                     outline=outline,
                     previous_sections=generated_sections,
                     progress_callback=lambda stage, prog, msg:
                         progress_callback(
-                            stage, 
-                            base_progress + int(prog * 0.7 / total_sections),
-                            msg
+                            stage,
+                            min(92, base_progress + int(prog * 0.5 / max(total_sections, 1))),
+                            msg,
                         ) if progress_callback else None,
-                    section_index=section_num
+                    section_index=section_num,
                 )
-                
+
                 section.content = section_content
                 generated_sections.append(f"## {section.title}\n\n{section_content}")
-
-                # Save section
                 ReportManager.save_section(report_id, section_num, section)
                 completed_section_titles.append(section.title)
-
-                # Log section completion
-                full_section_content = f"## {section.title}\n\n{section_content}"
 
                 if self.report_logger:
                     self.report_logger.log_section_full_complete(
                         section_title=section.title,
                         section_index=section_num,
-                        full_content=full_section_content.strip()
+                        full_content=f"## {section.title}\n\n{section_content}".strip(),
                     )
 
-                logger.info(f"Section saved: {report_id}/section_{section_num:02d}.md")
-
-                # Update progress
                 ReportManager.update_progress(
-                    report_id, "generating",
-                    base_progress + int(70 / total_sections),
+                    report_id,
+                    "generating",
+                    min(92, base_progress + int(55 / max(total_sections, 1))),
                     f"Section {section.title} complete",
                     current_section=None,
-                    completed_sections=completed_section_titles
+                    completed_sections=completed_section_titles,
                 )
 
-            # Phase 2.5: Quality & Credibility Assessment
+            section_dicts = [{"title": section.title, "content": section.content} for section in outline.sections]
+
             if self.include_quality_assessment:
-                try:
-                    from .quality_validator import validate_text, validation_summary
-                    from .credibility_assessor import (
-                        extract_predictions, assess_credibility, credibility_summary
-                    )
-                    from .evidence_grounding import tag_unverified_claims
+                from .quality_validator import validate_text
+                quality_signals = validate_text("\n\n".join(generated_sections), section_dicts)
+            else:
+                quality_signals = []
 
-                    if progress_callback:
-                        progress_callback("generating", 92, "Running quality assessment...")
+            self.current_quantitative_checks = self.quantitative_validator.validate(
+                section_dicts,
+                self.current_claim_ledger,
+            )
+            deduped_sections, editorial_defects = self.editorial_consolidator.deduplicate_sections(section_dicts)
 
-                    # Collect all section content and build sections list
-                    full_text = "\n\n".join(generated_sections)
-                    section_dicts = [
-                        {"title": s.title, "content": s.content}
-                        for s in outline.sections if s.content
-                    ]
+            for section, updated in zip(outline.sections, deduped_sections):
+                section.content = updated["content"]
 
-                    # Run validation
-                    signals = validate_text(full_text, section_dicts)
+            for index, section in enumerate(outline.sections, start=1):
+                ReportManager.save_section(report_id, index, section)
 
-                    # Extract and assess predictions
-                    predictions = extract_predictions(full_text)
-                    evidence_lines = [
-                        line.strip()
-                        for sec in generated_sections
-                        for line in sec.split('\n')
-                        if line.strip() and len(line.strip()) > 20
-                    ]
-                    if predictions:
-                        assess_credibility(predictions, evidence_lines)
+            generated_sections = [f"## {section.title}\n\n{section.content}" for section in outline.sections]
 
-                    # Build assessment section content
-                    assessment_md = ""
-                    val_summary = validation_summary(signals)
-                    cred_summary = credibility_summary(predictions)
-                    if val_summary or cred_summary:
-                        assessment_md = "\n\n---\n\n## Quality & Credibility Assessment\n"
-                        assessment_md += val_summary + cred_summary
+            for entry in self.current_claim_ledger:
+                entry.report_sections = [
+                    section.title for section in outline.sections
+                    if section.title in entry.report_sections or entry.claim_text[:24].lower() in section.content.lower()
+                ] or entry.report_sections
 
-                    # Tag claims in final section with grounding status
-                    if generated_sections and evidence_lines:
-                        last_idx = len(generated_sections) - 1
-                        generated_sections[last_idx] = tag_unverified_claims(
-                            generated_sections[last_idx], evidence_lines
-                        )
+            self.current_quality_gates = self.quality_gate_evaluator.evaluate(
+                claim_ledger=self.current_claim_ledger,
+                missing_inputs=self.current_missing_inputs,
+                quantitative_checks=self.current_quantitative_checks,
+                editorial_defects=editorial_defects,
+            )
 
-                    # Save assessment as an extra section
-                    if assessment_md:
-                        extra_section_num = total_sections + 1
-                        extra_section = ReportSection(
-                            title="Quality & Credibility Assessment",
-                        )
-                        extra_section.content = assessment_md
-                        ReportManager.save_section(report_id, extra_section_num, extra_section)
-                        generated_sections.append(assessment_md)
-                        completed_section_titles.append("Quality & Credibility Assessment")
-                        logger.info(f"Quality assessment section saved: {report_id}")
+            if quality_signals and self.current_quality_gates:
+                self.current_quality_gates[0].details.extend(signal.title for signal in quality_signals[:5])
 
-                except Exception as e:
-                    logger.warning(f"Quality assessment failed (non-fatal): {e}")
+            source_inputs_used = ["uploaded_documents", "graph_context", "external_search"]
+            if self.current_intent and self.current_intent.simulation_mode in {"required", "optional", "useful_but_optional"}:
+                source_inputs_used.append("simulation_outputs")
+            if self.deliberation_session_id:
+                source_inputs_used.append("deliberation_outputs")
 
-            # Phase 3: Assemble complete report
+            self.current_run_trace = self.run_trace_builder.build(
+                source_inputs_used=source_inputs_used,
+                simulation_used=self.current_intent.simulation_mode in {"required", "optional", "useful_but_optional"},
+                simulation_reason=self.current_intent.simulation_mode,
+                graph_usage="Used as structured context and graph facts for evidence briefing.",
+                search_plan=self.current_search_plan,
+                claim_ledger=self.current_claim_ledger,
+                missing_inputs=self.current_missing_inputs,
+                quality_gates=self.current_quality_gates,
+            )
+
+            self._refresh_structured_sections(outline)
+            for index, section in enumerate(outline.sections, start=1):
+                ReportManager.save_section(report_id, index, section)
+
+            report.quantitative_checks = [check.to_dict() for check in self.current_quantitative_checks]
+            report.quality_gates = [gate.to_dict() for gate in self.current_quality_gates]
+            report.run_trace = self.current_run_trace.to_dict() if self.current_run_trace else None
+            report.verification_summary = self._build_verification_summary()
+            report.evidence_summary = self.current_evidence_brief.to_dict() if self.current_evidence_brief else None
+            report.search_plan = self.current_search_plan
+            report.missing_critical_inputs = [item.to_dict() for item in self.current_missing_inputs]
+
+            self._save_pipeline_artifacts(report_id)
+
+            if self.report_logger:
+                self.report_logger.log(
+                    action="quality_gate_complete",
+                    stage="generating",
+                    details={
+                        "quality_gates": report.quality_gates,
+                        "quantitative_checks": report.quantitative_checks,
+                        "verification_summary": report.verification_summary,
+                    },
+                )
+
             if progress_callback:
                 progress_callback("generating", 95, "Assembling complete report...")
 
             ReportManager.update_progress(
-                report_id, "generating", 95, "Assembling complete report...",
-                completed_sections=completed_section_titles
+                report_id,
+                "generating",
+                95,
+                "Assembling complete report...",
+                completed_sections=completed_section_titles,
             )
 
-            # Use ReportManager to assemble complete report
             report.markdown_content = ReportManager.assemble_full_report(report_id, outline)
             report.status = ReportStatus.COMPLETED
             report.completed_at = datetime.now().isoformat()
 
-            # Calculate total elapsed time
             total_time_seconds = (datetime.now() - start_time).total_seconds()
-
-            # Log report completion
             if self.report_logger:
                 self.report_logger.log_report_complete(
                     total_sections=total_sections,
-                    total_time_seconds=total_time_seconds
+                    total_time_seconds=total_time_seconds,
                 )
 
-            # Save final report
             ReportManager.save_report(report)
             ReportManager.update_progress(
-                report_id, "completed", 100, "Report generation complete",
-                completed_sections=completed_section_titles
+                report_id,
+                "completed",
+                100,
+                "Report generation complete",
+                completed_sections=completed_section_titles,
             )
 
             if progress_callback:
                 progress_callback("completed", 100, "Report generation complete")
 
             logger.info(f"Report generation complete: {report_id}")
-
-            # Close console logger
             if self.console_logger:
                 self.console_logger.close()
                 self.console_logger = None
-
             return report
 
         except Exception as e:
@@ -2139,25 +2514,24 @@ class ReportAgent:
             report.status = ReportStatus.FAILED
             report.error = str(e)
 
-            # Log error
             if self.report_logger:
                 self.report_logger.log_error(str(e), "failed")
 
-            # Save failure state
             try:
                 ReportManager.save_report(report)
                 ReportManager.update_progress(
-                    report_id, "failed", -1, f"Report generation failed: {str(e)}",
-                    completed_sections=completed_section_titles
+                    report_id,
+                    "failed",
+                    -1,
+                    f"Report generation failed: {str(e)}",
+                    completed_sections=completed_section_titles,
                 )
             except Exception:
-                pass  # Ignore errors when saving failure state
+                pass
 
-            # Close console logger
             if self.console_logger:
                 self.console_logger.close()
                 self.console_logger = None
-
             return report
     
     def _extract_citations_from_text(self, content: str) -> List[Dict[str, str]]:
@@ -2403,6 +2777,10 @@ class ReportManager:
     def _get_progress_path(cls, report_id: str) -> str:
         """Get progress file path"""
         return os.path.join(cls._get_report_folder(report_id), "progress.json")
+
+    @classmethod
+    def _get_artifact_path(cls, report_id: str, artifact_name: str) -> str:
+        return os.path.join(cls._get_report_folder(report_id), f"{artifact_name}.json")
     
     @classmethod
     def _get_section_path(cls, report_id: str, section_index: int) -> str:
@@ -2592,6 +2970,20 @@ class ReportManager:
 
         logger.info(f"Section saved: {report_id}/{file_suffix}")
         return file_path
+
+    @classmethod
+    def save_artifact(cls, report_id: str, artifact_name: str, payload: Any) -> None:
+        cls._ensure_report_folder(report_id)
+        with open(cls._get_artifact_path(report_id, artifact_name), 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def get_artifact(cls, report_id: str, artifact_name: str) -> Optional[Any]:
+        path = cls._get_artifact_path(report_id, artifact_name)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
     
     @classmethod
     def _clean_section_content(cls, content: str, section_title: str) -> str:
@@ -2932,7 +3324,9 @@ class ReportManager:
             for s in outline_data.get('sections', []):
                 sections.append(ReportSection(
                     title=s['title'],
-                    content=s.get('content', '')
+                    content=s.get('content', ''),
+                    key=s.get('key', ''),
+                    description=s.get('description', ''),
                 ))
             outline = ReportOutline(
                 title=outline_data['title'],
@@ -2953,12 +3347,22 @@ class ReportManager:
             simulation_id=data['simulation_id'],
             graph_id=data['graph_id'],
             simulation_requirement=data['simulation_requirement'],
+            project_id=data.get('project_id', ''),
             status=ReportStatus(data['status']),
             outline=outline,
             markdown_content=markdown_content,
             created_at=data.get('created_at', ''),
             completed_at=data.get('completed_at', ''),
-            error=data.get('error')
+            error=data.get('error'),
+            intent=data.get('intent'),
+            schema=data.get('schema'),
+            evidence_summary=data.get('evidence_summary') or cls.get_artifact(report_id, "evidence_brief"),
+            verification_summary=data.get('verification_summary'),
+            missing_critical_inputs=data.get('missing_critical_inputs') or cls.get_artifact(report_id, "missing_inputs") or [],
+            quantitative_checks=data.get('quantitative_checks') or cls.get_artifact(report_id, "quantitative_checks") or [],
+            quality_gates=data.get('quality_gates') or cls.get_artifact(report_id, "quality_gates") or [],
+            run_trace=data.get('run_trace') or cls.get_artifact(report_id, "run_trace"),
+            search_plan=data.get('search_plan') or cls.get_artifact(report_id, "search_plan") or [],
         )
     
     @classmethod

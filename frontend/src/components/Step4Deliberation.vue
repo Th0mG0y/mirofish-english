@@ -185,10 +185,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   getSession,
+  getDeliberationStatus,
   runDebate,
   conductVoting,
   synthesize
@@ -210,6 +211,82 @@ const running = ref(false)
 const currentPhase = ref('idle') // idle | debating | voting | synthesizing | done
 const generatingReport = ref(false)
 const errorMessage = ref('')
+let sessionPollTimer = null
+
+function hasDebateCompleted(sessionData) {
+  return Array.isArray(sessionData?.rounds) && sessionData.rounds.length > 0
+}
+
+function hasVotingCompleted(sessionData) {
+  return !!sessionData?.vote_results && Object.keys(sessionData.vote_results || {}).length > 0
+}
+
+function startSessionPolling() {
+  if (sessionPollTimer) return
+  sessionPollTimer = setInterval(refreshSessionState, 2500)
+}
+
+function stopSessionPolling() {
+  if (sessionPollTimer) {
+    clearInterval(sessionPollTimer)
+    sessionPollTimer = null
+  }
+}
+
+function syncUiWithSession(sessionData) {
+  if (!sessionData) {
+    running.value = false
+    currentPhase.value = 'idle'
+    emit('update-status', 'error')
+    stopSessionPolling()
+    return
+  }
+
+  if (sessionData.status === 'failed') {
+    running.value = false
+    currentPhase.value = 'idle'
+    emit('update-status', 'error')
+    stopSessionPolling()
+    return
+  }
+
+  if (sessionData.synthesis || sessionData.status === 'completed') {
+    running.value = false
+    currentPhase.value = 'done'
+    emit('update-status', 'completed')
+    stopSessionPolling()
+    return
+  }
+
+  if (sessionData.status === 'synthesizing' && !sessionData.synthesis) {
+    running.value = true
+    currentPhase.value = 'synthesizing'
+    emit('update-status', 'synthesizing')
+    startSessionPolling()
+    return
+  }
+
+  if (sessionData.status === 'voting' && !hasVotingCompleted(sessionData)) {
+    running.value = true
+    currentPhase.value = 'voting'
+    emit('update-status', 'voting')
+    startSessionPolling()
+    return
+  }
+
+  if (sessionData.status === 'debating' && !hasDebateCompleted(sessionData)) {
+    running.value = true
+    currentPhase.value = 'debating'
+    emit('update-status', 'debating')
+    startSessionPolling()
+    return
+  }
+
+  running.value = false
+  currentPhase.value = 'idle'
+  emit('update-status', 'idle')
+  stopSessionPolling()
+}
 
 function notify(title, body) {
   if (!('Notification' in window)) return
@@ -295,27 +372,34 @@ async function loadSession() {
   try {
     const res = await getSession(props.sessionId)
     session.value = res.data
-    // Set phase based on existing session state
-    if (session.value) {
-      if (session.value.synthesis) {
-        currentPhase.value = 'done'
-        emit('update-status', 'completed')
-      } else if (hasVoteResults.value) {
-        currentPhase.value = 'idle'
-        emit('update-status', 'idle')
-      } else if (session.value.rounds?.length > 0) {
-        currentPhase.value = 'idle'
-        emit('update-status', 'idle')
-      } else {
-        currentPhase.value = 'idle'
-        emit('update-status', 'idle')
-      }
-    }
+    syncUiWithSession(session.value)
   } catch (e) {
     console.error('Failed to load session:', e)
+    running.value = false
     emit('update-status', 'error')
   } finally {
     loading.value = false
+  }
+}
+
+async function refreshSessionState() {
+  if (!props.sessionId) return
+
+  try {
+    const [sessionRes, statusRes] = await Promise.all([
+      getSession(props.sessionId),
+      getDeliberationStatus(props.sessionId)
+    ])
+
+    session.value = sessionRes.data
+
+    if (statusRes.success && statusRes.data?.status && session.value) {
+      session.value.status = statusRes.data.status
+    }
+
+    syncUiWithSession(session.value)
+  } catch (e) {
+    console.error('Failed to refresh session state:', e)
   }
 }
 
@@ -385,8 +469,13 @@ async function startSynthesis() {
 
 function backToSimulation() {
   const simId = props.simulationId || session.value?.simulation_id
+  const sessionId = props.sessionId || session.value?.session_id
   if (simId) {
-    router.push(`/simulation/${simId}/start`)
+    router.push({
+      name: 'SimulationRun',
+      params: { simulationId: simId },
+      query: sessionId ? { deliberationSessionId: sessionId } : {}
+    })
   } else {
     router.push('/')
   }
@@ -433,6 +522,17 @@ onMounted(() => {
     Notification.requestPermission()
   }
   loadSession()
+})
+
+onUnmounted(() => {
+  stopSessionPolling()
+})
+
+watch(() => props.sessionId, (newSessionId, oldSessionId) => {
+  if (newSessionId && newSessionId !== oldSessionId) {
+    stopSessionPolling()
+    loadSession()
+  }
 })
 </script>
 

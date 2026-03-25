@@ -150,6 +150,7 @@ def generate_report():
                     simulation_requirement=simulation_requirement,
                     deliberation_session_id=deliberation_session_id,
                     include_quality_assessment=include_quality_assessment,
+                    project_id=project.project_id,
                 )
                 
                 # Progress callback
@@ -567,6 +568,7 @@ def chat_with_report_agent():
             simulation_id=simulation_id,
             simulation_requirement=simulation_requirement,
             deliberation_session_id=deliberation_session_id,
+            project_id=project.project_id,
         )
         
         result = agent.chat(message=message, chat_history=chat_history)
