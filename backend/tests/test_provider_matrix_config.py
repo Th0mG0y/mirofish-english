@@ -195,8 +195,6 @@ def test_anthropic_provider_uses_claude_cli_when_configured(monkeypatch):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[:3] == ["claude", "auth", "status"]:
-            return SimpleNamespace(returncode=0, stdout="logged in", stderr="")
         return SimpleNamespace(
             returncode=0,
             stdout='{"type":"result","is_error":false,"result":"hello","usage":{"input_tokens":12,"output_tokens":4}}',
@@ -216,7 +214,6 @@ def test_anthropic_provider_uses_claude_cli_when_configured(monkeypatch):
         "completion_tokens": 4,
         "total_tokens": 16,
     }
-    assert any(command[:3] == ["claude", "auth", "status"] for command in calls)
     assert any(command[0] == "claude" and "-p" in command for command in calls)
 
 
@@ -228,8 +225,6 @@ def test_claude_cli_provider_returns_json_text_for_chat_json(monkeypatch):
     )
 
     def fake_run(command, **kwargs):
-        if command[:3] == ["claude", "auth", "status"]:
-            return SimpleNamespace(returncode=0, stdout="logged in", stderr="")
         return SimpleNamespace(
             returncode=0,
             stdout=(
@@ -268,7 +263,7 @@ def test_graphiti_uses_claude_cli_client_when_configured(monkeypatch):
     monkeypatch.setattr("app.utils.llm_provider.shutil.which", lambda command: command)
     monkeypatch.setattr(
         "app.utils.llm_provider.subprocess.run",
-        lambda command, **kwargs: SimpleNamespace(returncode=0, stdout="logged in", stderr=""),
+        lambda command, **kwargs: SimpleNamespace(returncode=0, stdout='{"type":"result","is_error":false,"result":"hello"}', stderr=""),
     )
 
     client = create_graphiti_llm_client()
@@ -288,8 +283,6 @@ def test_graphiti_claude_cli_client_normalizes_attribute_wrapper(monkeypatch):
     )
 
     def fake_run(command, **kwargs):
-        if command[:3] == ["claude", "auth", "status"]:
-            return SimpleNamespace(returncode=0, stdout="logged in", stderr="")
         return SimpleNamespace(
             returncode=0,
             stdout=(
@@ -333,8 +326,6 @@ def test_graphiti_claude_cli_client_uses_json_schema_for_required_edge_fields(mo
 
     def fake_run(command, **kwargs):
         observed_commands.append(command)
-        if command[:3] == ["claude", "auth", "status"]:
-            return SimpleNamespace(returncode=0, stdout="logged in", stderr="")
         return SimpleNamespace(
             returncode=0,
             stdout=(
@@ -360,3 +351,31 @@ def test_graphiti_claude_cli_client_uses_json_schema_for_required_edge_fields(mo
 
     assert result == {"duplicate_facts": [], "contradicted_facts": []}
     assert any("--json-schema" in command for command in observed_commands)
+
+
+def test_claude_cli_provider_does_not_require_auth_status_probe(monkeypatch):
+    apply_config(
+        monkeypatch,
+        CLAUDE_CLI_USE_CREDENTIALS=True,
+        CLAUDE_CLI_COMMAND="claude",
+        ANTHROPIC_API_KEY="",
+    )
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"type":"result","is_error":false,"result":"hello"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr("app.utils.llm_provider.shutil.which", lambda command: command)
+    monkeypatch.setattr("app.utils.llm_provider.subprocess.run", fake_run)
+
+    provider = ClaudeCliProvider(model="claude-sonnet-4-6")
+    response = provider.chat([{"role": "user", "content": "Say hello"}])
+
+    assert response.content == "hello"
+    assert all(command[:3] != ["claude", "auth", "status"] for command in calls)

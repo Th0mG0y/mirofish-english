@@ -9,7 +9,7 @@ import time
 import threading
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from queue import Queue, Empty
 
 from ..config import Config
@@ -449,7 +449,12 @@ class ZepGraphMemoryUpdater:
             activities: List of agent activities
             platform: Platform name
         """
-        if not activities or not self._graphiti or not self._loop:
+        if (
+            not activities
+            or not self._graphiti
+            or not self._loop
+            or self._loop.is_closed()
+        ):
             return
 
         from graphiti_core.nodes import EpisodeType
@@ -467,7 +472,7 @@ class ZepGraphMemoryUpdater:
                         episode_body=combined_text,
                         source_description=f"MiroFish simulation {platform} activities",
                         source=EpisodeType.text,
-                        reference_time=datetime.utcnow(),
+                        reference_time=datetime.now(timezone.utc),
                         group_id=self.graph_id,
                     )
                 )
@@ -480,12 +485,27 @@ class ZepGraphMemoryUpdater:
                 return
 
             except Exception as e:
+                if self._is_fatal_send_error(e):
+                    logger.error(f"Stopping graph memory updater after fatal send failure: {e}")
+                    self._running = False
+                    self._graphiti = None
+                    return
+
                 if attempt < self.MAX_RETRIES - 1:
                     logger.warning(f"Batch send to graph failed (attempt {attempt + 1}/{self.MAX_RETRIES}): {e}")
                     time.sleep(self.RETRY_DELAY * (attempt + 1))
                 else:
                     logger.error(f"Batch send to graph failed after {self.MAX_RETRIES} retries: {e}")
                     self._failed_count += 1
+
+    def _is_fatal_send_error(self, error: Exception) -> bool:
+        message = str(error).lower()
+        return (
+            "cannot schedule new futures after shutdown" in message
+            or "event loop is closed" in message
+            or "winerror 10038" in message
+            or "not a socket" in message
+        )
 
     def _flush_remaining(self):
         """Flush remaining activities in the queue and buffers"""

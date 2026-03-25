@@ -388,25 +388,34 @@ class ClaudeCliProvider(LLMProvider):
                 "Set CLAUDE_CLI_COMMAND or install Claude Code."
             )
 
-        self._verify_auth()
+        self._warn_if_credentials_are_missing()
         logger.info(f"ClaudeCliProvider initialized: model={self.model}, command={self.command}")
 
-    def _verify_auth(self) -> None:
-        result = subprocess.run(
-            [self.command, "auth", "status", "--text"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=min(self.timeout_seconds, 20),
-            check=False,
+    def _warn_if_credentials_are_missing(self) -> None:
+        if not Config.CLAUDE_CLI_USE_CREDENTIALS:
+            return
+        if Config.get_claude_cli_api_key():
+            return
+        logger.warning(
+            "Claude CLI credentials could not be read from the configured credentials file. "
+            "Claude requests may fail until the CLI is authenticated."
         )
-        if result.returncode != 0:
-            error_text = (result.stderr or result.stdout or "").strip()
+
+    def _raise_cli_error(self, stderr: str, stdout: str) -> None:
+        error_text = (stderr or stdout or "").strip()
+        lowered = error_text.lower()
+        if (
+            "auth login" in lowered
+            or "not authenticated" in lowered
+            or "login required" in lowered
+            or "please login" in lowered
+            or "please log in" in lowered
+        ):
             raise ValueError(
                 "Claude CLI is not authenticated. Run `claude auth login` first."
                 + (f" Details: {error_text}" if error_text else "")
             )
+        raise RuntimeError(error_text or "Claude CLI invocation failed")
 
     def _split_messages(self, messages: List[Dict[str, str]]) -> tuple[str, List[Dict[str, str]]]:
         system_parts: List[str] = []
@@ -510,7 +519,7 @@ class ClaudeCliProvider(LLMProvider):
         stderr = (result.stderr or "").strip()
 
         if result.returncode != 0:
-            raise RuntimeError(stderr or stdout or "Claude CLI invocation failed")
+            self._raise_cli_error(stderr, stdout)
         if not stdout:
             raise RuntimeError("Claude CLI returned no output")
 
