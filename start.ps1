@@ -179,7 +179,7 @@ npm install --prefix (Join-Path $root "frontend")
 Write-Host "    Installing backend packages..."
 Push-Location (Join-Path $root "backend")
 uv sync
-uv pip install "graphiti-core==0.28.2" "neo4j==5.26.0"
+uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
 Pop-Location
 
 Write-Ok "All dependencies installed"

@@ -96,18 +96,22 @@
           :disabled="phase !== 2 || isCreatingDeliberation"
           @click="handleDeliberation"
         >
-          <span v-if="isCreatingDeliberation" class="loading-spinner-small"></span>
-          {{ isCreatingDeliberation ? 'Creating...' : 'Proceed to Deliberation' }}
-          <span v-if="!isCreatingDeliberation" class="arrow-icon">→</span>
+          <span class="action-btn-content">
+            <span v-if="isCreatingDeliberation" class="loading-spinner-small"></span>
+            <span class="action-btn-label">{{ isCreatingDeliberation ? 'Creating...' : 'Proceed to Deliberation' }}</span>
+            <span v-if="!isCreatingDeliberation" class="arrow-icon">→</span>
+          </span>
         </button>
         <button
           class="action-btn primary"
           :disabled="phase !== 2 || isGeneratingReport"
           @click="handleNextStep"
         >
-          <span v-if="isGeneratingReport" class="loading-spinner-small"></span>
-          {{ isGeneratingReport ? 'Starting...' : 'Generate Result Report' }}
-          <span v-if="!isGeneratingReport" class="arrow-icon">→</span>
+          <span class="action-btn-content">
+            <span v-if="isGeneratingReport" class="loading-spinner-small"></span>
+            <span class="action-btn-label">{{ isGeneratingReport ? 'Starting...' : 'Generate Result Report' }}</span>
+            <span v-if="!isGeneratingReport" class="arrow-icon">→</span>
+          </span>
         </button>
       </div>
     </div>
@@ -923,6 +927,22 @@ onUnmounted(() => {
   transition: all 0.2s ease;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  min-width: 170px;
+  min-height: 28px;
+}
+
+.action-btn-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.action-btn-label {
+  min-width: 0;
+  text-align: center;
 }
 
 .action-btn.secondary {
@@ -1270,6 +1290,6 @@ onUnmounted(() => {
   border-top-color: #FFF;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-  margin-right: 6px;
+  flex-shrink: 0;
 }
 </style>

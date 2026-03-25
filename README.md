@@ -2,22 +2,8 @@
 
 <img src="./static/image/MiroFish_logo_compressed.jpeg" alt="MiroFish Logo" width="75%"/>
 
-<a href="https://trendshift.io/repositories/16144" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16144" alt="666ghj%2FMiroFish | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-A Simple and Universal Swarm Intelligence Engine, Predicting Anything
 </br>
 <em>A Simple and Universal Swarm Intelligence Engine, Predicting Anything</em>
-
-
-[![GitHub Stars](https://img.shields.io/github/stars/666ghj/MiroFish?style=flat-square&color=DAA520)](https://github.com/666ghj/MiroFish/stargazers)
-[![GitHub Watchers](https://img.shields.io/github/watchers/666ghj/MiroFish?style=flat-square)](https://github.com/666ghj/MiroFish/watchers)
-[![GitHub Forks](https://img.shields.io/github/forks/666ghj/MiroFish?style=flat-square)](https://github.com/666ghj/MiroFish/network)
-[![Docker](https://img.shields.io/badge/Docker-Build-2496ED?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/666ghj/MiroFish)
-
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.com/channels/1469200078932545606/1469201282077163739)
-[![X](https://img.shields.io/badge/X-Follow-000000?style=flat-square&logo=x&logoColor=white)](https://x.com/mirofish_ai)
-[![Instagram](https://img.shields.io/badge/Instagram-Follow-E4405F?style=flat-square&logo=instagram&logoColor=white)](https://www.instagram.com/mirofish_ai/)
 
 </div>
 
@@ -47,12 +33,15 @@ Instead, it uses:
 - a local `Neo4j` database running on your own machine
 - separate provider settings for the main app, Graphiti extraction, embeddings, and reranking
 - optional local vector models through `Ollama` or `LM Studio`
+- optional reuse of credentials cached by the OpenAI CLI / Codex CLI or Claude Code
 
 What that means in practice:
 
 - you need a local Neo4j instance running before graph building will work
 - you can run OpenAI-only, Anthropic plus local vectors, or a mixed setup
 - the old Zep-based quick start is no longer the correct setup path for this implementation
+- report generation can pull deliberation data from debate, voting, and synthesis when it is available
+- report chat can surface source links returned by web-search-enabled providers
 
 If you want a full beginner-friendly walkthrough, including where to get API keys and exactly which models to set, start here:
 
@@ -66,25 +55,11 @@ Quick template choices:
 - `All local via LM Studio`: `.env.lmstudio.example`
 - `Mixed/custom`: `.env.example`
 
-## 📸 Screenshots
+Optional auth fallback:
 
-<div align="center">
-<table>
-<tr>
-<td><img src="./static/image/Screenshot/运行截图1.png" alt="Screenshot 1" width="100%"/></td>
-<td><img src="./static/image/Screenshot/运行截图2.png" alt="Screenshot 2" width="100%"/></td>
-</tr>
-<tr>
-<td><img src="./static/image/Screenshot/运行截图3.png" alt="Screenshot 3" width="100%"/></td>
-<td><img src="./static/image/Screenshot/运行截图4.png" alt="Screenshot 4" width="100%"/></td>
-</tr>
-<tr>
-<td><img src="./static/image/Screenshot/运行截图5.png" alt="Screenshot 5" width="100%"/></td>
-<td><img src="./static/image/Screenshot/运行截图6.png" alt="Screenshot 6" width="100%"/></td>
-</tr>
-</table>
-</div>
-
+- set `OPENAI_CLI_USE_CREDENTIALS=true` to try reusing a key from `~/.codex/auth.json`
+- set `CLAUDE_CLI_USE_CREDENTIALS=true` to try reusing a key from `~/.claude/.credentials.json`
+- direct `LLM_API_KEY` and `ANTHROPIC_API_KEY` values still take priority when both are present
 
 ## 🔄 Workflow
 
@@ -92,8 +67,9 @@ Quick template choices:
 2. **Environment Setup**: Entity relationship extraction & Persona generation & Agent configuration injection
 3. **Simulation**: Dual-platform parallel simulation & Auto-parse prediction requirements & Dynamic temporal memory updates
    > **Tip:** Keep simulations at or below **20 rounds** to avoid hitting OpenAI/Anthropic rate limits.
-4. **Report Generation**: ReportAgent with rich toolset for deep interaction with post-simulation environment
-5. **Deep Interaction**: Chat with any agent in the simulated world & Interact with ReportAgent
+4. **Deliberation**: Debate, voting, and synthesis can run after simulation, and the resulting data is carried into report generation
+5. **Report Generation**: ReportAgent can use deliberation context and web-search-backed tool results while drafting sections
+6. **Deep Interaction**: Chat with any agent in the simulated world and with ReportAgent, including clickable source links when search providers return citations
 
 ## 🚀 Quick Start
 
@@ -121,7 +97,7 @@ cp .env.openai.example .env
 # 3. Install root + frontend + backend dependencies
 npm run setup:all
 
-# 4. Install the extra packages required by this Graphiti build
+# 4. If you want to mirror the one-click scripts exactly, refresh the graph/ontology packages
 cd backend
 uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
 cd ..
@@ -145,9 +121,11 @@ chmod +x start.sh
 ./start.sh
 ```
 
-The script will check for required dependencies (Python 3.11+, Node 18+, Docker, uv) and **install any that are missing** (via `winget` on Windows, or `brew`/`apt`/`dnf`/`pacman` on macOS/Linux), then start Neo4j, install all project packages, and launch the app.
+The script will check for required dependencies (Python 3.11+, Node 18+, Docker, uv) and **install any that are missing** (via `winget` on Windows, or `brew`/`apt`/`dnf`/`pacman` on macOS/Linux), then start Neo4j, install all project packages, refresh the graph/ontology packages used by this build, and launch the app.
 
 > **Note:** You still need to edit `.env` with your API keys before the app will work. The script copies `.env.openai.example` as a starting point if no `.env` exists.
+>
+> If you already use the OpenAI CLI / Codex CLI or Claude Code locally, you can also enable the optional CLI credential fallbacks in `.env` instead of pasting keys directly.
 
 ### Required Services For This Version
 
@@ -165,6 +143,8 @@ Recommended models:
 - `GRAPHITI_EMBEDDER_MODEL=nomic-embed-text` for Ollama
 - `MIROFISH_SEARCH_PROVIDER=anthropic`
 - `MIROFISH_SEARCH_MODEL=claude-sonnet-4-6`
+
+Search-backed reports and chat work best when `MIROFISH_SEARCH_PROVIDER` points to a real OpenAI or Anthropic account, because local OpenAI-compatible servers do not provide the built-in web search APIs this app expects.
 
 ### Local Addresses During Development
 
@@ -232,9 +212,3 @@ If you run this modified version for users over a network, the AGPL requires you
 For private questions, collaboration, or licensing-related contact:
 
 - `th0mg0y@proton.me`
-
-## 📄 Acknowledgments
-
-**MiroFish has received strategic support and incubation from Shanda Group!**
-
-MiroFish's simulation engine is powered by **[OASIS](https://github.com/camel-ai/oasis)**. We sincerely thank the CAMEL-AI team for their open-source contributions!

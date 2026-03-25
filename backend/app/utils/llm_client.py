@@ -45,7 +45,7 @@ class LLMClient:
                 api_key=api_key,
                 base_url=self.base_url,
                 provider_name='openai',
-                fallback=Config.LLM_API_KEY,
+                fallback=Config.LLM_API_KEY or Config.get_openai_cli_api_key(),
             )
 
             self.client = OpenAI(

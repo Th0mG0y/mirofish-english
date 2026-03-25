@@ -576,6 +576,21 @@ Verify a specific claim by searching for supporting or contradicting evidence on
 - Explanation of the evidence
 - Supporting and contradicting sources with URLs"""
 
+TOOL_DESC_DELIBERATION_DATA = """\
+[Deliberation Data - Debate, Voting, and Synthesis]
+Retrieve the structured adversarial council outputs tied to this simulation.
+
+[Use Cases]
+- Quote arguments from the debate directly
+- Inspect voting splits and contested dimensions
+- Pull the synthesis without relying only on the saved report text
+- Compare simulation-world retrieval with the council's internal deliberation
+
+[Return Content]
+- Debate summary with round-by-round arguments
+- Voting dimensions, percentages, and contested flags
+- Final synthesis text when available"""
+
 # ── Outline planning prompt ──
 
 PLAN_SYSTEM_PROMPT = """\
@@ -748,6 +763,9 @@ This section analyzes...
 - panorama_search: Wide-angle panoramic search, understand the full event picture, timeline, and evolution
 - quick_search: Quickly verify a specific information point
 - interview_agents: Interview simulation Agents, get first-person perspectives and real reactions from different roles
+- web_search: Ground simulation findings in real-world reporting and attach URLs
+- fact_check: Verify the strongest claims before presenting them as findings
+- deliberation_data: Pull debate, voting, and synthesis outputs directly when council data matters
 
 ═══════════════════════════════════════════════════════════════
 [Workflow]
@@ -875,6 +893,8 @@ Prediction conditions: {simulation_requirement}
 2. Answer questions directly, avoid lengthy reasoning
 3. Only call tools to retrieve more data when the report content is insufficient to answer
 4. Answers should be concise, clear, and well-organized
+5. When using web_search or fact_check, surface the most relevant source URLs in the answer
+6. When users ask about debate, voting, or synthesis details, use deliberation_data if needed
 
 [Available Tools] (use only when needed, max 1-2 calls)
 {tools_description}
@@ -1005,6 +1025,14 @@ class ReportAgent:
                 "parameters": {
                     "claim": "The specific claim to fact-check"
                 }
+            },
+            "deliberation_data": {
+                "name": "deliberation_data",
+                "description": TOOL_DESC_DELIBERATION_DATA,
+                "parameters": {
+                    "focus": "Optional focus: debate, voting, synthesis, or all",
+                    "max_arguments": "Maximum number of debate arguments to include (optional, default 12)"
+                }
             }
         }
     
@@ -1108,6 +1136,16 @@ class ReportAgent:
                         output += f"- [{c.title}]({c.url}): {c.snippet}\n"
                 return output
 
+            elif tool_name == "deliberation_data":
+                focus = parameters.get("focus", "all")
+                max_arguments = parameters.get("max_arguments", 12)
+                if isinstance(max_arguments, str):
+                    max_arguments = int(max_arguments)
+                return self._build_deliberation_tool_output(
+                    focus=str(focus or "all"),
+                    max_arguments=max(1, min(int(max_arguments), 24)),
+                )
+
             # ========== Backward-compatible old tools (internally redirected to new tools) ==========
 
             elif tool_name == "search_graph":
@@ -1143,14 +1181,98 @@ class ReportAgent:
                 return json.dumps(result, ensure_ascii=False, indent=2)
             
             else:
-                return f"Unknown tool: {tool_name}. Please use one of: insight_forge, panorama_search, quick_search, web_search, fact_check"
+                return f"Unknown tool: {tool_name}. Please use one of: insight_forge, panorama_search, quick_search, interview_agents, web_search, fact_check, deliberation_data"
 
         except Exception as e:
             logger.error(f"Tool execution failed: {tool_name}, error: {str(e)}")
             return f"Tool execution failed: {str(e)}"
 
     # Set of valid tool names, used to validate bare JSON fallback parsing
-    VALID_TOOL_NAMES = {"insight_forge", "panorama_search", "quick_search", "interview_agents", "web_search", "fact_check"}
+    VALID_TOOL_NAMES = {"insight_forge", "panorama_search", "quick_search", "interview_agents", "web_search", "fact_check", "deliberation_data"}
+
+    def _get_deliberation_session(self):
+        try:
+            from ..models.deliberation_manager import DeliberationManager
+
+            if self.deliberation_session_id:
+                return DeliberationManager.get(self.deliberation_session_id)
+
+            delib_session = DeliberationManager.get_by_simulation(self.simulation_id)
+            if delib_session:
+                self.deliberation_session_id = delib_session.session_id
+            return delib_session
+        except Exception as e:
+            logger.warning(f"Failed to load deliberation session: {e}")
+            return None
+
+    def _build_deliberation_tool_output(self, focus: str = "all", max_arguments: int = 12) -> str:
+        delib_session = self._get_deliberation_session()
+        if not delib_session:
+            return "### Deliberation Data\n\nNo deliberation session is available for this simulation."
+
+        focus_value = (focus or "all").strip().lower()
+        include_debate = focus_value in {"all", "debate"}
+        include_voting = focus_value in {"all", "voting"}
+        include_synthesis = focus_value in {"all", "synthesis"}
+
+        output = [
+            "### Deliberation Data",
+            "",
+            f"- Session ID: {delib_session.session_id}",
+            f"- Topic: {delib_session.topic}",
+            f"- Status: {delib_session.status.value}",
+            f"- Debate rounds: {len(delib_session.rounds)}",
+        ]
+
+        if include_debate:
+            output.extend(["", "#### Debate"])
+            argument_count = 0
+            for rnd in delib_session.rounds:
+                output.append(f"- Round {rnd.round_number}")
+                for arg in rnd.arguments:
+                    if argument_count >= max_arguments:
+                        break
+                    label = "OPTIMIST" if arg.position == "optimist" else "PESSIMIST"
+                    output.append(
+                        f"  - [{label}] {arg.member_id} ({arg.confidence:.0%} confidence): {arg.content[:300]}"
+                    )
+                    argument_count += 1
+                if argument_count >= max_arguments:
+                    break
+            if argument_count == 0:
+                output.append("- No debate arguments recorded yet.")
+
+        if include_voting:
+            output.extend(["", "#### Voting Results"])
+            dims = delib_session.vote_results.get("dimensions", {}) if delib_session.vote_results else {}
+            if dims:
+                for dim_name, dim_data in dims.items():
+                    pct = dim_data.get("raw_percentage", {})
+                    output.append(
+                        "- "
+                        + f"{dim_name}: "
+                        + f"{dim_data.get('position_a_label', 'A')}={pct.get('position_a', 0)}%, "
+                        + f"{dim_data.get('position_b_label', 'B')}={pct.get('position_b', 0)}%, "
+                        + f"Neither={pct.get('neither', 0)}% "
+                        + f"(votes={dim_data.get('total_votes', 0)})"
+                    )
+                contested = delib_session.vote_results.get("contested_dimensions", [])
+                neither = delib_session.vote_results.get("neither_triggered", [])
+                if contested:
+                    output.append(f"- Contested dimensions: {', '.join(contested)}")
+                if neither:
+                    output.append(f"- Neither threshold triggered: {', '.join(neither)}")
+            else:
+                output.append("- No voting results recorded yet.")
+
+        if include_synthesis:
+            output.extend(["", "#### Synthesis"])
+            if delib_session.synthesis:
+                output.append(delib_session.synthesis[:2500])
+            else:
+                output.append("No synthesis recorded yet.")
+
+        return "\n".join(output)
 
     def _parse_tool_calls(self, response: str) -> List[Dict[str, Any]]:
         """
@@ -1227,8 +1349,7 @@ class ReportAgent:
             return ""
 
         try:
-            from ..models.deliberation_manager import DeliberationManager
-            delib_session = DeliberationManager.get(self.deliberation_session_id)
+            delib_session = self._get_deliberation_session()
             if not delib_session:
                 return ""
 
@@ -1346,10 +1467,9 @@ class ReportAgent:
         )
 
         # Append deliberation context if available
-        if self.deliberation_session_id:
+        if self.deliberation_session_id or self._get_deliberation_session():
             try:
-                from ..models.deliberation_manager import DeliberationManager
-                delib_session = DeliberationManager.get(self.deliberation_session_id)
+                delib_session = self._get_deliberation_session()
                 if delib_session:
                     delib_context = "\n\n[Adversarial Council Deliberation]\n"
                     delib_context += f"Topic: {delib_session.topic}\n"
@@ -1476,7 +1596,7 @@ class ReportAgent:
         )
 
         # Inject deliberation context for sections that need it
-        if self.deliberation_session_id:
+        if self.deliberation_session_id or self._get_deliberation_session():
             delib_context = self._build_deliberation_context_for_section(section.title)
             if delib_context:
                 user_prompt += delib_context
@@ -1492,7 +1612,15 @@ class ReportAgent:
         min_tool_calls = 3  # Minimum tool calls required
         conflict_retries = 0  # Number of consecutive conflicts where tool call and Final Answer appeared simultaneously
         used_tools = set()  # Track tools already called
-        all_tools = {"insight_forge", "panorama_search", "quick_search", "interview_agents"}
+        all_tools = {
+            "insight_forge",
+            "panorama_search",
+            "quick_search",
+            "interview_agents",
+            "web_search",
+            "fact_check",
+            "deliberation_data",
+        }
 
         # Report context, used for InsightForge sub-question generation
         report_context = f"Section title: {section.title}\nSimulation requirement: {self.simulation_requirement}"
@@ -2032,6 +2160,61 @@ class ReportAgent:
 
             return report
     
+    def _extract_citations_from_text(self, content: str) -> List[Dict[str, str]]:
+        sources = []
+        citation_pattern = re.compile(r"^- \[(?P<title>[^\]]+)\]\((?P<url>[^)]+)\):\s*(?P<snippet>.*)$", re.MULTILINE)
+        for match in citation_pattern.finditer(content or ""):
+            sources.append({
+                "title": match.group("title").strip(),
+                "url": match.group("url").strip(),
+                "snippet": match.group("snippet").strip(),
+            })
+        return sources
+
+    def _merge_sources(
+        self,
+        existing_sources: List[Dict[str, str]],
+        new_sources: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        seen = {
+            (
+                (item.get("title") or "").strip().lower(),
+                (item.get("url") or "").strip().lower(),
+                (item.get("snippet") or "").strip().lower(),
+            )
+            for item in existing_sources
+        }
+        merged = list(existing_sources)
+        for source in new_sources:
+            key = (
+                (source.get("title") or "").strip().lower(),
+                (source.get("url") or "").strip().lower(),
+                (source.get("snippet") or "").strip().lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(source)
+        return merged
+
+    def _build_sources_from_tool_result(
+        self,
+        tool_name: str,
+        parameters: Dict[str, Any],
+        result: str,
+    ) -> List[Dict[str, str]]:
+        if tool_name in {"web_search", "fact_check"}:
+            return self._extract_citations_from_text(result)
+
+        if tool_name == "deliberation_data" and self.deliberation_session_id:
+            return [{
+                "title": f"Deliberation Session {self.deliberation_session_id}",
+                "url": "",
+                "snippet": f"Focus: {parameters.get('focus', 'all')}",
+            }]
+
+        return []
+
     def chat(
         self, 
         message: str,
@@ -2075,6 +2258,11 @@ class ReportAgent:
             tools_description=self._get_tools_description(),
         )
 
+        delib_session = self._get_deliberation_session()
+        if delib_session:
+            deliberation_preview = self._build_deliberation_tool_output(focus="all", max_arguments=6)
+            system_prompt += f"\n\n[Deliberation Context Preview]\n{deliberation_preview[:4000]}"
+
         # Build messages
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -2090,6 +2278,7 @@ class ReportAgent:
 
         # ReACT loop (simplified)
         tool_calls_made = []
+        source_entries: List[Dict[str, str]] = []
         max_iterations = 2  # Reduced iteration count
 
         for iteration in range(max_iterations):
@@ -2109,7 +2298,7 @@ class ReportAgent:
                 return {
                     "response": clean_response.strip(),
                     "tool_calls": tool_calls_made,
-                    "sources": [tc.get("parameters", {}).get("query", "") for tc in tool_calls_made]
+                    "sources": source_entries,
                 }
 
             # Execute tool calls (limit count)
@@ -2123,6 +2312,14 @@ class ReportAgent:
                     "result": result[:1500]  # Limit result length
                 })
                 tool_calls_made.append(call)
+                source_entries = self._merge_sources(
+                    source_entries,
+                    self._build_sources_from_tool_result(
+                        tool_name=call["name"],
+                        parameters=call.get("parameters", {}),
+                        result=result,
+                    ),
+                )
 
             # Add results to messages
             messages.append({"role": "assistant", "content": response})
@@ -2145,7 +2342,7 @@ class ReportAgent:
         return {
             "response": clean_response.strip(),
             "tool_calls": tool_calls_made,
-            "sources": [tc.get("parameters", {}).get("query", "") for tc in tool_calls_made]
+            "sources": source_entries,
         }
 
 

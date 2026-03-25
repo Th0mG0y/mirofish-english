@@ -226,7 +226,7 @@ echo "    Installing frontend packages..."
 (cd frontend && npm install)
 
 echo "    Installing backend packages..."
-(cd backend && uv sync && uv pip install "graphiti-core==0.28.2" "neo4j==5.26.0")
+(cd backend && uv sync && uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0")
 
 ok "All dependencies installed"
 

@@ -3,6 +3,7 @@ Configuration management
 Unified loading of configuration from the .env file in the project root directory
 """
 
+import json
 import os
 from dotenv import load_dotenv
 
@@ -34,6 +35,64 @@ def _get_env(name: str, default: str | None = None) -> str | None:
     return normalized_value
 
 
+def _expand_env_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    return os.path.expanduser(os.path.expandvars(path))
+
+
+def _load_json_credentials(path: str | None) -> dict:
+    resolved_path = _expand_env_path(path)
+    if not resolved_path or not os.path.exists(resolved_path):
+        return {}
+
+    try:
+        with open(resolved_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return {}
+
+    return {}
+
+
+def _extract_first_string(data: dict, candidate_paths: list[tuple[str, ...]]) -> str | None:
+    for candidate_path in candidate_paths:
+        current = data
+        for part in candidate_path:
+            if not isinstance(current, dict) or part not in current:
+                current = None
+                break
+            current = current[part]
+        if isinstance(current, str) and current.strip():
+            return current.strip()
+    return None
+
+
+_OPENAI_CLI_KEY_CANDIDATES = [
+    ("api_key",),
+    ("apiKey",),
+    ("openai_api_key",),
+    ("openaiApiKey",),
+    ("credentials", "api_key"),
+    ("credentials", "apiKey"),
+    ("auth", "api_key"),
+    ("auth", "apiKey"),
+]
+
+_CLAUDE_CLI_KEY_CANDIDATES = [
+    ("api_key",),
+    ("apiKey",),
+    ("anthropic_api_key",),
+    ("anthropicApiKey",),
+    ("credentials", "api_key"),
+    ("credentials", "apiKey"),
+    ("credentials", "anthropic_api_key"),
+    ("credentials", "anthropicApiKey"),
+]
+
+
 class Config:
     """Flask configuration class"""
 
@@ -51,6 +110,14 @@ class Config:
     LLM_MODEL_NAME = _get_env('LLM_MODEL_NAME', 'gpt-5.4-mini')
     ANTHROPIC_API_KEY = _get_env('ANTHROPIC_API_KEY')
     ANTHROPIC_MODEL_NAME = _get_env('ANTHROPIC_MODEL_NAME', 'claude-sonnet-4-6')
+    OPENAI_CLI_USE_CREDENTIALS = _get_env('OPENAI_CLI_USE_CREDENTIALS', 'false').lower() == 'true'
+    OPENAI_CLI_CREDENTIALS_FILE = _expand_env_path(
+        _get_env('OPENAI_CLI_CREDENTIALS_FILE', os.path.join('~', '.codex', 'auth.json'))
+    )
+    CLAUDE_CLI_USE_CREDENTIALS = _get_env('CLAUDE_CLI_USE_CREDENTIALS', 'false').lower() == 'true'
+    CLAUDE_CLI_CREDENTIALS_FILE = _expand_env_path(
+        _get_env('CLAUDE_CLI_CREDENTIALS_FILE', os.path.join('~', '.claude', '.credentials.json'))
+    )
 
     # Ollama configuration
     OLLAMA_API_KEY = _get_env('OLLAMA_API_KEY')  # For Ollama cloud web search
@@ -144,6 +211,20 @@ class Config:
         return explicit_model or cls.LLM_MODEL_NAME
 
     @classmethod
+    def get_openai_cli_api_key(cls) -> str | None:
+        if not cls.OPENAI_CLI_USE_CREDENTIALS:
+            return None
+        data = _load_json_credentials(cls.OPENAI_CLI_CREDENTIALS_FILE)
+        return _extract_first_string(data, _OPENAI_CLI_KEY_CANDIDATES)
+
+    @classmethod
+    def get_claude_cli_api_key(cls) -> str | None:
+        if not cls.CLAUDE_CLI_USE_CREDENTIALS:
+            return None
+        data = _load_json_credentials(cls.CLAUDE_CLI_CREDENTIALS_FILE)
+        return _extract_first_string(data, _CLAUDE_CLI_KEY_CANDIDATES)
+
+    @classmethod
     def get_provider_model(cls, provider_name: str, explicit_model: str | None = None) -> str:
         provider_name = provider_name.lower()
         if explicit_model:
@@ -163,7 +244,7 @@ class Config:
     @classmethod
     def get_main_openai_compatible_api_key(cls) -> str:
         return resolve_openai_compatible_api_key(
-            api_key=cls.LLM_API_KEY,
+            api_key=cls.LLM_API_KEY or cls.get_openai_cli_api_key(),
             base_url=cls.LLM_BASE_URL,
             provider_name='openai',
         )
@@ -171,7 +252,7 @@ class Config:
     @classmethod
     def get_graphiti_llm_api_key(cls) -> str:
         if cls.GRAPHITI_LLM_PROVIDER == 'anthropic':
-            api_key = cls.GRAPHITI_LLM_API_KEY or cls.ANTHROPIC_API_KEY
+            api_key = cls.GRAPHITI_LLM_API_KEY or cls.ANTHROPIC_API_KEY or cls.get_claude_cli_api_key()
             if not api_key:
                 raise ValueError("Graphiti Anthropic API key is not configured")
             return api_key
@@ -184,7 +265,7 @@ class Config:
             )
 
         return resolve_openai_compatible_api_key(
-            api_key=cls.GRAPHITI_LLM_API_KEY or cls.LLM_API_KEY,
+            api_key=cls.GRAPHITI_LLM_API_KEY or cls.LLM_API_KEY or cls.get_openai_cli_api_key(),
             base_url=cls.GRAPHITI_LLM_BASE_URL or cls.LLM_BASE_URL,
             provider_name='openai',
         )
@@ -207,6 +288,8 @@ class Config:
     ) -> str:
         base_url = cls.get_graphiti_openai_compatible_base_url(provider_name, explicit_base_url)
         fallback = cls.LLM_API_KEY if provider_name.lower() == 'openai' else None
+        if provider_name.lower() == 'openai' and not fallback:
+            fallback = cls.get_openai_cli_api_key()
         return resolve_openai_compatible_api_key(
             api_key=explicit_api_key,
             base_url=base_url,
@@ -237,7 +320,7 @@ class Config:
                 cls.get_main_openai_compatible_api_key()
             except ValueError:
                 errors.append("LLM_API_KEY is not configured (required when MIROFISH_LLM_PROVIDER=openai unless LLM_BASE_URL points to a local OpenAI-compatible server)")
-        if cls.LLM_PROVIDER == 'anthropic' and not cls.ANTHROPIC_API_KEY:
+        if cls.LLM_PROVIDER == 'anthropic' and not (cls.ANTHROPIC_API_KEY or cls.get_claude_cli_api_key()):
             errors.append("ANTHROPIC_API_KEY is not configured (required when MIROFISH_LLM_PROVIDER=anthropic)")
         # ollama provider needs no API key for local inference (key auto-resolves to "ollama")
 
@@ -246,7 +329,7 @@ class Config:
                 cls.get_main_openai_compatible_api_key()
             except ValueError:
                 errors.append("LLM_API_KEY is not configured (required when MIROFISH_SEARCH_PROVIDER=openai unless LLM_BASE_URL points to a local OpenAI-compatible server)")
-        if cls.SEARCH_PROVIDER == 'anthropic' and not cls.ANTHROPIC_API_KEY:
+        if cls.SEARCH_PROVIDER == 'anthropic' and not (cls.ANTHROPIC_API_KEY or cls.get_claude_cli_api_key()):
             errors.append("ANTHROPIC_API_KEY is not configured (required when MIROFISH_SEARCH_PROVIDER=anthropic)")
         # ollama search provider: OLLAMA_API_KEY is optional (only needed for cloud web search)
 

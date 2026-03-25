@@ -100,8 +100,9 @@
               </svg>
               <span>Chat with Report Agent</span>
             </button>
-            <div class="agent-dropdown" v-if="profiles.length > 0">
+            <div ref="agentDropdownRef" class="agent-dropdown" v-if="profiles.length > 0">
               <button 
+                ref="agentTriggerRef"
                 class="tab-pill agent-pill"
                 :class="{ active: activeTab === 'chat' && chatTarget === 'agent' }"
                 @click="toggleAgentDropdown"
@@ -115,21 +116,6 @@
                   <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
               </button>
-              <div v-if="showAgentDropdown" class="dropdown-menu">
-                <div class="dropdown-header">Select Conversation Target</div>
-                <div 
-                  v-for="(agent, idx) in profiles" 
-                  :key="idx"
-                  class="dropdown-item"
-                  @click="selectAgent(agent, idx)"
-                >
-                  <div class="agent-avatar">{{ (agent.username || 'A')[0] }}</div>
-                  <div class="agent-info">
-                    <span class="agent-name">{{ agent.username }}</span>
-                    <span class="agent-role">{{ agent.profession || 'Unknown Profession' }}</span>
-                  </div>
-                </div>
-              </div>
             </div>
             <div class="tab-divider"></div>
             <button 
@@ -271,6 +257,23 @@
                   <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
                 </div>
                 <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
+                <div v-if="msg.sources?.length" class="message-sources">
+                  <span class="sources-label">Sources</span>
+                  <template v-for="(source, sourceIdx) in msg.sources" :key="`${idx}-${sourceIdx}`">
+                    <a
+                      v-if="source.url"
+                      class="source-chip"
+                      :href="source.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {{ source.title || source.url }}
+                    </a>
+                    <span v-else class="source-chip plain">
+                      {{ source.title || source.snippet || 'Source' }}
+                    </span>
+                  </template>
+                </div>
               </div>
             </div>
             <div v-if="isSending" class="chat-message assistant">
@@ -407,6 +410,28 @@
         </div>
       </div>
     </div>
+    <Teleport to="body">
+      <div
+        v-if="showAgentDropdown"
+        ref="dropdownMenuRef"
+        class="dropdown-menu"
+        :style="dropdownStyle"
+      >
+        <div class="dropdown-header">Select Conversation Target</div>
+        <div
+          v-for="(agent, idx) in profiles"
+          :key="idx"
+          class="dropdown-item"
+          @click="selectAgent(agent, idx)"
+        >
+          <div class="agent-avatar">{{ (agent.username || 'A')[0] }}</div>
+          <div class="agent-info">
+            <span class="agent-name">{{ agent.username }}</span>
+            <span class="agent-role">{{ agent.profession || 'Unknown Profession' }}</span>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -430,6 +455,7 @@ const selectedAgent = ref(null)
 const selectedAgentIndex = ref(null)
 const showFullProfile = ref(true)
 const showToolsDetail = ref(true)
+const dropdownStyle = ref({})
 
 // Chat State
 const chatInput = ref('')
@@ -460,6 +486,9 @@ const isSectionCompleted = (sectionIndex) => {
 // Refs
 const leftPanel = ref(null)
 const rightPanel = ref(null)
+const agentDropdownRef = ref(null)
+const agentTriggerRef = ref(null)
+const dropdownMenuRef = ref(null)
 
 // Methods
 const addLog = (msg) => {
@@ -521,6 +550,10 @@ const toggleAgentDropdown = () => {
   if (showAgentDropdown.value) {
     activeTab.value = 'chat'
     chatTarget.value = 'agent'
+    nextTick(() => {
+      updateAgentDropdownPosition()
+      requestAnimationFrame(() => updateAgentDropdownPosition())
+    })
   }
 }
 
@@ -536,6 +569,36 @@ const selectAgent = (agent, idx) => {
   // Restore this agent's conversation history
   chatHistory.value = chatHistoryCache.value[`agent_${idx}`] || []
   addLog(`Selected conversation target: ${agent.username}`)
+}
+
+const updateAgentDropdownPosition = () => {
+  if (!showAgentDropdown.value || !agentTriggerRef.value) return
+
+  const rect = agentTriggerRef.value.getBoundingClientRect()
+  const viewportPadding = 12
+  const preferredWidth = Math.min(340, Math.max(260, rect.width + 48))
+  const estimatedHeight = dropdownMenuRef.value?.offsetHeight || 320
+  const spaceBelow = window.innerHeight - rect.bottom - viewportPadding
+  const spaceAbove = rect.top - viewportPadding
+  const shouldOpenUpward = spaceBelow < 220 && spaceAbove > spaceBelow
+
+  let left = rect.left + rect.width / 2 - preferredWidth / 2
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - preferredWidth - viewportPadding))
+
+  let top = rect.bottom + 8
+  if (shouldOpenUpward) {
+    top = Math.max(viewportPadding, rect.top - estimatedHeight - 8)
+  } else {
+    top = Math.min(top, window.innerHeight - estimatedHeight - viewportPadding)
+  }
+
+  dropdownStyle.value = {
+    left: `${left}px`,
+    top: `${Math.max(viewportPadding, top)}px`,
+    width: `${preferredWidth}px`,
+    maxWidth: `calc(100vw - ${viewportPadding * 2}px)`,
+    maxHeight: `${Math.max(180, shouldOpenUpward ? spaceAbove - 8 : spaceBelow - 8)}px`,
+  }
 }
 
 const formatTime = (timestamp) => {
@@ -698,7 +761,9 @@ const sendToReportAgent = async (message) => {
     chatHistory.value.push({
       role: 'assistant',
       content: res.data.response || res.data.answer || 'No response',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      sources: res.data.sources || [],
+      toolCalls: res.data.tool_calls || []
     })
     addLog('Report Agent replied')
   } else {
@@ -927,10 +992,14 @@ const loadProfiles = async () => {
 
 // Click outside to close dropdown
 const handleClickOutside = (e) => {
-  const dropdown = document.querySelector('.agent-dropdown')
-  if (dropdown && !dropdown.contains(e.target)) {
-    showAgentDropdown.value = false
-  }
+  if (!showAgentDropdown.value) return
+  if (agentDropdownRef.value?.contains(e.target)) return
+  if (dropdownMenuRef.value?.contains(e.target)) return
+  showAgentDropdown.value = false
+}
+
+const handleViewportChange = () => {
+  updateAgentDropdownPosition()
 }
 
 // Lifecycle
@@ -939,10 +1008,14 @@ onMounted(() => {
   loadReportData()
   loadProfiles()
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('resize', handleViewportChange)
+  window.addEventListener('scroll', handleViewportChange, true)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', handleViewportChange)
+  window.removeEventListener('scroll', handleViewportChange, true)
 })
 
 watch(() => props.reportId, (newId) => {
@@ -956,6 +1029,14 @@ watch(() => props.simulationId, (newId) => {
     loadProfiles()
   }
 }, { immediate: true })
+
+watch(showAgentDropdown, (isOpen) => {
+  if (!isOpen) return
+  nextTick(() => {
+    updateAgentDropdownPosition()
+    requestAnimationFrame(() => updateAgentDropdownPosition())
+  })
+})
 </script>
 
 <style scoped>
@@ -978,18 +1059,21 @@ watch(() => props.simulationId, (newId) => {
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-width: 0;
 }
 
 /* Left Panel - Report Style (identical to Step4Report.vue) */
 .left-panel.report-style {
+  flex: 0 1 45%;
   width: 45%;
-  min-width: 450px;
+  min-width: 320px;
+  max-width: 680px;
   background: #FFFFFF;
   border-right: 1px solid #E5E7EB;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  padding: 30px 50px 60px 50px;
+  padding: 24px 36px 48px;
 }
 
 .left-panel::-webkit-scrollbar {
@@ -1306,17 +1390,19 @@ watch(() => props.simulationId, (newId) => {
   flex-direction: column;
   background: #FFFFFF;
   overflow: hidden;
+  min-width: 0;
 }
 
 /* Action Bar - Professional Design */
 .action-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding: 14px 20px;
   border-bottom: 1px solid #E5E7EB;
   background: linear-gradient(180deg, #FFFFFF 0%, #FAFBFC 100%);
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .action-bar-header {
@@ -1324,6 +1410,7 @@ watch(() => props.simulationId, (newId) => {
   align-items: center;
   gap: 12px;
   min-width: 160px;
+  flex: 0 1 auto;
 }
 
 .action-bar-icon {
@@ -1335,6 +1422,7 @@ watch(() => props.simulationId, (newId) => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .action-bar-title {
@@ -1359,6 +1447,8 @@ watch(() => props.simulationId, (newId) => {
   gap: 6px;
   flex: 1;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .tab-pill {
@@ -1374,6 +1464,15 @@ watch(() => props.simulationId, (newId) => {
   border-radius: 20px;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.tab-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1405,7 +1504,8 @@ watch(() => props.simulationId, (newId) => {
 }
 
 .agent-pill {
-  width: 200px;
+  width: 100%;
+  max-width: 100%;
   justify-content: space-between;
 }
 
@@ -1803,6 +1903,9 @@ watch(() => props.simulationId, (newId) => {
 /* Agent Dropdown */
 .agent-dropdown {
   position: relative;
+  flex: 1 1 240px;
+  min-width: 0;
+  max-width: 320px;
 }
 
 .dropdown-arrow {
@@ -1816,18 +1919,14 @@ watch(() => props.simulationId, (newId) => {
 }
 
 .dropdown-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 240px;
+  position: fixed;
+  min-width: 0;
   background: #FFFFFF;
   border: 1px solid #E5E7EB;
   border-radius: 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
-  max-height: 320px;
   overflow-y: auto;
-  z-index: 100;
+  z-index: 1000;
 }
 
 .dropdown-header {
@@ -1970,10 +2069,11 @@ watch(() => props.simulationId, (newId) => {
 }
 
 .message-content {
-  max-width: 70%;
+  max-width: min(78%, 680px);
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .chat-message.user .message-content {
@@ -2006,6 +2106,7 @@ watch(() => props.simulationId, (newId) => {
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .chat-message.user .message-text {
@@ -2064,6 +2165,45 @@ watch(() => props.simulationId, (newId) => {
   margin: 4px 0;
 }
 
+.message-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.sources-label {
+  width: 100%;
+  font-size: 11px;
+  font-weight: 600;
+  color: #9CA3AF;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #F3F4F6;
+  color: #374151;
+  font-size: 11px;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-chip:hover {
+  background: #E5E7EB;
+}
+
+.source-chip.plain {
+  cursor: default;
+}
+
 /* Typing Indicator */
 .typing-indicator {
   display: flex;
@@ -2098,6 +2238,7 @@ watch(() => props.simulationId, (newId) => {
   display: flex;
   gap: 12px;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
 
 .chat-input {
@@ -2134,6 +2275,7 @@ watch(() => props.simulationId, (newId) => {
   align-items: center;
   justify-content: center;
   transition: background 0.2s ease;
+  flex-shrink: 0;
 }
 
 .send-btn:hover:not(:disabled) {
@@ -2144,6 +2286,45 @@ watch(() => props.simulationId, (newId) => {
   background: #E5E7EB;
   color: #9CA3AF;
   cursor: not-allowed;
+}
+
+@media (max-width: 1280px) {
+  .left-panel.report-style {
+    min-width: 280px;
+    padding: 20px 24px 36px;
+  }
+
+  .action-bar {
+    padding: 14px 16px;
+  }
+
+  .tools-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1040px) {
+  .main-split-layout {
+    flex-direction: column;
+  }
+
+  .left-panel.report-style {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    max-height: 42%;
+    border-right: none;
+    border-bottom: 1px solid #E5E7EB;
+  }
+
+  .action-bar-tabs {
+    justify-content: flex-start;
+  }
+
+  .agent-dropdown {
+    flex-basis: 100%;
+    max-width: 100%;
+  }
 }
 
 /* Survey Container */

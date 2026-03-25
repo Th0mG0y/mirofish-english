@@ -550,12 +550,23 @@ def chat_with_report_agent():
             }), 400
 
         simulation_requirement = project.simulation_requirement or ""
+        deliberation_session_id = None
+
+        try:
+            from ..models.deliberation_manager import DeliberationManager
+
+            delib_session = DeliberationManager.get_by_simulation(simulation_id)
+            if delib_session:
+                deliberation_session_id = delib_session.session_id
+        except Exception as e:
+            logger.debug(f"No deliberation session found for report chat on {simulation_id}: {e}")
 
         # Create Agent and start conversation
         agent = ReportAgent(
             graph_id=graph_id,
             simulation_id=simulation_id,
-            simulation_requirement=simulation_requirement
+            simulation_requirement=simulation_requirement,
+            deliberation_session_id=deliberation_session_id,
         )
         
         result = agent.chat(message=message, chat_history=chat_history)

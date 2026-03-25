@@ -15,6 +15,7 @@ dependencies = [
 
     # LLM related
     "openai>=1.0.0",
+    "anthropic>=0.40.0",
 
     # Zep Cloud
     "zep-cloud==3.13.0",
