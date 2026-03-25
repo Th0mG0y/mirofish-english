@@ -86,6 +86,37 @@ class SearchService:
         logger.info(f"Search complete: {len(result.citations)} citations")
         return result
 
+    def _dedupe_citations(self, citations: List[Citation]) -> List[Citation]:
+        seen = set()
+        deduped = []
+        for citation in citations:
+            key = (
+                (citation.url or "").strip().lower(),
+                (citation.title or "").strip().lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(citation)
+        return deduped
+
+    def _format_search_context(self, query: str, result: WebSearchResult) -> str:
+        parts = [f"### {query}", ""]
+
+        if result.answer:
+            parts.append(result.answer)
+        else:
+            parts.append("No answer summary returned.")
+
+        if result.citations:
+            parts.extend(["", "**Sources**"])
+            for citation in result.citations:
+                title = citation.title or citation.url or "Untitled source"
+                snippet = citation.snippet or "No snippet available."
+                parts.append(f"- [{title}]({citation.url}): {snippet}")
+
+        return "\n".join(parts)
+
     def search_batch(self, queries: List[str]) -> List[WebSearchResult]:
         """
         Perform multiple searches.
@@ -155,19 +186,20 @@ Return a JSON object: {{"queries": ["query1", "query2", ...]}}"""
 
         for query in queries:
             result = self.search(query, context=f"Research context: {requirement}")
-            if result.answer:
-                context_parts.append(f"### {query}\n{result.answer}")
+            context_parts.append(self._format_search_context(query, result))
             all_citations.extend(result.citations)
+
+        deduped_citations = self._dedupe_citations(all_citations)
 
         enrichment = EnrichmentResult(
             original_requirement=requirement,
             queries_used=queries,
             supplementary_context="\n\n".join(context_parts),
-            citations=all_citations,
-            total_sources=len(all_citations)
+            citations=deduped_citations,
+            total_sources=len(deduped_citations)
         )
 
-        logger.info(f"Enrichment complete: {len(queries)} queries, {len(all_citations)} citations")
+        logger.info(f"Enrichment complete: {len(queries)} queries, {len(deduped_citations)} citations")
         return enrichment
 
     def fact_check(self, claim: str) -> FactCheckResult:

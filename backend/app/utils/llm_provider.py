@@ -16,6 +16,18 @@ from ..utils.logger import get_logger
 logger = get_logger('mirofish.llm_provider')
 
 
+def _dedupe_citations(citations: List["Citation"]) -> List["Citation"]:
+    seen = set()
+    deduped = []
+    for citation in citations:
+        key = ((citation.url or "").strip().lower(), (citation.title or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(citation)
+    return deduped
+
+
 @dataclass
 class Citation:
     """A citation from web search results"""
@@ -86,7 +98,7 @@ class OpenAIProvider(LLMProvider):
             api_key=api_key,
             base_url=self.base_url,
             provider_name='openai',
-            fallback=Config.LLM_API_KEY,
+            fallback=Config.LLM_API_KEY or Config.get_openai_cli_api_key(),
         )
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -168,10 +180,14 @@ class OpenAIProvider(LLMProvider):
                                     citations.append(Citation(
                                         url=ann.url,
                                         title=getattr(ann, 'title', ''),
-                                        snippet=""
+                                        snippet=(
+                                            getattr(ann, 'text', '')
+                                            or getattr(ann, 'quote', '')
+                                            or getattr(ann, 'excerpt', '')
+                                        )
                                     ))
 
-            return WebSearchResult(query=query, answer=answer, citations=citations)
+            return WebSearchResult(query=query, answer=answer, citations=_dedupe_citations(citations))
 
         except Exception as e:
             logger.warning(f"OpenAI web search failed: {e}")
@@ -191,7 +207,7 @@ class AnthropicProvider(LLMProvider):
         except ImportError:
             raise ImportError("anthropic package is required. Install with: pip install anthropic>=0.40.0")
 
-        self.api_key = api_key or Config.ANTHROPIC_API_KEY
+        self.api_key = api_key or Config.ANTHROPIC_API_KEY or Config.get_claude_cli_api_key()
         self.model = model or Config.ANTHROPIC_MODEL_NAME
 
         if not self.api_key:
@@ -298,7 +314,7 @@ class AnthropicProvider(LLMProvider):
                             snippet=getattr(cite, 'cited_text', '')
                         ))
 
-            return WebSearchResult(query=query, answer=answer, citations=citations)
+            return WebSearchResult(query=query, answer=answer, citations=_dedupe_citations(citations))
 
         except Exception as e:
             logger.warning(f"Anthropic web search failed: {e}")
@@ -429,7 +445,7 @@ class OllamaProvider(LLMProvider):
                     f"**{c.title}**: {c.snippet}" for c in citations if c.snippet
                 )
 
-            return WebSearchResult(query=query, answer=answer, citations=citations)
+            return WebSearchResult(query=query, answer=answer, citations=_dedupe_citations(citations))
 
         except urllib.error.HTTPError as e:
             logger.warning(f"Ollama web search HTTP error {e.code}: {e.reason}")

@@ -125,32 +125,32 @@
       </div>
 
       <!-- Voting Results -->
-      <div v-if="session?.vote_results?.dimensions" class="voting-section">
+      <div v-if="hasVoteResults" class="voting-section">
         <h3 class="section-title">Voting Results</h3>
         <div class="vote-dimensions">
-          <div v-for="(dimData, dimName) in session.vote_results.dimensions" :key="dimName" class="dimension-card">
+          <div v-for="([dimName, dimData]) in voteDimensions" :key="dimName" class="dimension-card">
             <div class="dim-name">{{ dimName }}</div>
             <div class="vote-bar-container">
               <div class="vote-label-a">{{ dimData.position_a_label }}</div>
               <div class="vote-bar">
                 <div
                   class="bar-fill position-a"
-                  :style="{ width: dimData.raw_percentage.position_a + '%' }"
+                  :style="{ width: getVotePercentage(dimData, 'position_a') + '%' }"
                 >
-                  {{ dimData.raw_percentage.position_a }}%
+                  {{ getVotePercentage(dimData, 'position_a') }}%
                 </div>
                 <div
                   class="bar-fill position-b"
-                  :style="{ width: dimData.raw_percentage.position_b + '%' }"
+                  :style="{ width: getVotePercentage(dimData, 'position_b') + '%' }"
                 >
-                  {{ dimData.raw_percentage.position_b }}%
+                  {{ getVotePercentage(dimData, 'position_b') }}%
                 </div>
                 <div
-                  v-if="dimData.raw_percentage.neither > 0"
+                  v-if="getVotePercentage(dimData, 'neither') > 0"
                   class="bar-fill neither"
-                  :style="{ width: dimData.raw_percentage.neither + '%' }"
+                  :style="{ width: getVotePercentage(dimData, 'neither') + '%' }"
                 >
-                  {{ dimData.raw_percentage.neither }}%
+                  {{ getVotePercentage(dimData, 'neither') }}%
                 </div>
               </div>
               <div class="vote-label-b">{{ dimData.position_b_label }}</div>
@@ -233,6 +233,9 @@ const statusLabel = computed(() => {
     }
     return map[currentPhase.value] || 'Processing...'
   }
+  if (session.value.synthesis) return 'Deliberation Complete'
+  if (hasVoteResults.value) return 'Voting Complete — Ready for Synthesis'
+  if (session.value.rounds?.length > 0) return 'Debate Complete — Ready for Voting'
   const map = {
     created: 'Session Created — Ready for Debate',
     debating: 'Debate in Progress',
@@ -243,6 +246,16 @@ const statusLabel = computed(() => {
   }
   return map[session.value.status] || session.value.status
 })
+
+const voteDimensions = computed(() => {
+  const dimensions = session.value?.vote_results?.dimensions || {}
+  return Object.entries(dimensions).filter(([, dimData]) => {
+    const percentages = dimData?.raw_percentage || {}
+    return dimData?.total_votes > 0 || Object.values(percentages).some(value => Number(value) > 0)
+  })
+})
+
+const hasVoteResults = computed(() => voteDimensions.value.length > 0)
 
 const phaseProgressText = computed(() => {
   const map = {
@@ -259,11 +272,11 @@ const canRunDebate = computed(() => {
 })
 
 const canVote = computed(() => {
-  return session.value && session.value.rounds?.length > 0 && !session.value.vote_results?.dimensions
+  return session.value && session.value.rounds?.length > 0 && !hasVoteResults.value
 })
 
 const canSynthesize = computed(() => {
-  return session.value && session.value.vote_results?.dimensions && !session.value.synthesis
+  return session.value && hasVoteResults.value && !session.value.synthesis
 })
 
 const isComplete = computed(() => {
@@ -287,7 +300,7 @@ async function loadSession() {
       if (session.value.synthesis) {
         currentPhase.value = 'done'
         emit('update-status', 'completed')
-      } else if (session.value.vote_results?.dimensions) {
+      } else if (hasVoteResults.value) {
         currentPhase.value = 'idle'
         emit('update-status', 'idle')
       } else if (session.value.rounds?.length > 0) {
@@ -409,6 +422,10 @@ function renderMarkdown(text) {
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\n\n/g, '</p><p>')
     .replace(/\n/g, '<br>')
+}
+
+function getVotePercentage(dimData, key) {
+  return Number(dimData?.raw_percentage?.[key] || 0)
 }
 
 onMounted(() => {

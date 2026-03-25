@@ -6,7 +6,7 @@ Read it once from top to bottom before you start.
 
 ## Quick Start (One-Click Setup)
 
-If you just want to get running as fast as possible, use the automated setup script. It will check for required tools, install any that are missing, start Neo4j, install all project dependencies, and launch the app.
+If you just want to get running as fast as possible, use the automated setup script. It will check for required tools, install any that are missing, start Neo4j, install all project dependencies, refresh the graph/ontology packages used by this build, and launch the app.
 
 **Windows (PowerShell):**
 
@@ -21,7 +21,7 @@ chmod +x start.sh
 ./start.sh
 ```
 
-> **Note:** You still need to edit `.env` with your API keys before the app will work. The script copies `.env.openai.example` as a starting point if no `.env` exists. See [Accounts And Keys You May Need](#accounts-and-keys-you-may-need) below for how to get API keys.
+> **Note:** You still need to edit `.env` with your API keys before the app will work. The script copies `.env.openai.example` as a starting point if no `.env` exists. See [Accounts And Keys You May Need](#accounts-and-keys-you-may-need) below for how to get API keys or enable the optional CLI credential fallbacks.
 
 If you prefer to set things up manually, or need a non-default provider configuration, continue reading below.
 
@@ -70,6 +70,8 @@ If you point an OpenAI-compatible setting to Ollama or LM Studio:
 If you want to keep setup simple, set:
 
 - `MIROFISH_ENABLE_SEARCH_ENRICHMENT=false`
+
+When search enrichment is enabled with a supported provider, report generation and report chat now surface source links from those search results directly in the UI.
 
 ## What You Need Before You Start
 
@@ -136,6 +138,23 @@ How to get it:
 Recommended starter model:
 
 - `claude-sonnet-4-6`
+
+### Optional CLI Credential Reuse
+
+If you already use the OpenAI CLI / Codex CLI or Claude Code locally, this repo can try to reuse the API keys cached by those tools.
+
+Use these only when the cached file contains a reusable API key:
+
+- `OPENAI_CLI_USE_CREDENTIALS=true`
+- `OPENAI_CLI_CREDENTIALS_FILE=~/.codex/auth.json`
+- `CLAUDE_CLI_USE_CREDENTIALS=true`
+- `CLAUDE_CLI_CREDENTIALS_FILE=~/.claude/.credentials.json`
+
+Notes:
+
+- direct `LLM_API_KEY` and `ANTHROPIC_API_KEY` values still take priority
+- this is a convenience fallback, not a separate provider mode
+- local `ollama` and `lmstudio` setups still do not gain built-in web search from these flags alone
 
 ### Neo4j Login
 
@@ -282,6 +301,8 @@ Copy-Item .env.example .env
 
 Then open `.env` and replace the placeholder values with your real values.
 
+If you prefer to reuse credentials from local CLI tools instead of pasting keys, enable the matching `*_CLI_USE_CREDENTIALS` flag and confirm the credential file path is correct for your machine.
+
 ## Step 5. Pick The Right Env Settings
 
 ### Option 1. OpenAI-only
@@ -392,23 +413,27 @@ From the project root, run:
 npm run setup:all
 ```
 
-## Step 7. Install The Extra Backend Packages For This Graphiti Build
+This installs the normal root, frontend, and backend dependencies for the current repo state.
 
-Run this from the `backend` folder:
+## Step 7. Optional Backend Package Refresh
+
+The one-click scripts already run this step for you.
+
+If you are following the manual path and want to mirror the scripts exactly, or you hit graph or ontology import errors, run this from the `backend` folder:
 
 ```powershell
 cd backend
 uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
+cd ..
 ```
 
 If PowerShell says some of them are already installed, that is fine.
 
 ## Step 8. Start The App
 
-Go back to the project root and run:
+From the project root, run:
 
 ```powershell
-cd ..
 npm run dev
 ```
 
@@ -445,6 +470,13 @@ The health response should look like:
 ```json
 {"status":"ok","service":"MiroFish Backend"}
 ```
+
+After your first full simulation, you can also verify the post-simulation flow:
+
+- the deliberation view should show debate, voting, and synthesis progress
+- vote results should appear once voting is complete
+- generated reports and report chat can use deliberation data from that run
+- if search enrichment is enabled with OpenAI or Anthropic, report chat should also show source links
 
 ## Step 10. First Graph Build Note
 
@@ -504,9 +536,19 @@ Fix:
 1. set `MIROFISH_ENABLE_SEARCH_ENRICHMENT=false`
 2. keep `MIROFISH_SEARCH_PROVIDER=anthropic` or a real OpenAI account
 
+### Graph or ontology routes fail with missing package errors
+
+If a route fails with missing `anthropic`, `graphiti`, or `neo4j` imports, refresh the backend packages from `backend`:
+
+```powershell
+uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
+```
+
+The one-click scripts already do this automatically.
+
 ## Simplest Working Checklists
 
-> **Tip:** For the OpenAI-only setup you can skip all manual steps and just run `.\start.ps1` (Windows) or `./start.sh` (macOS/Linux). The script handles everything below automatically — you only need to fill in your API key in `.env` afterwards.
+> **Tip:** For the OpenAI-only setup you can skip all manual steps and just run `.\start.ps1` (Windows) or `./start.sh` (macOS/Linux). The script handles everything below automatically, including the backend package refresh step. You only need to fill in your API key in `.env` afterwards.
 
 ### OpenAI-only
 
@@ -516,10 +558,8 @@ Fix:
 4. Copy `.env.openai.example` to `.env`
 5. Fill in your OpenAI key
 6. Run `npm run setup:all`
-7. Run `cd backend`
-8. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
-9. Run `cd ..`
-10. Run `npm run dev`
+7. If graph or ontology imports fail, run the optional backend package refresh from Step 7
+8. Run `npm run dev`
 
 ### Anthropic + OpenAI vectors
 
@@ -530,9 +570,8 @@ Fix:
 5. Copy `.env.anthropic.example` to `.env`
 6. Fill in your Anthropic key and OpenAI key
 7. Run `npm run setup:all`
-8. Run `cd backend`
-9. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
-10. Run `cd ..` and `npm run dev`
+8. If graph or ontology imports fail, run the optional backend package refresh from Step 7
+9. Run `npm run dev`
 
 ### All local via LM Studio
 
@@ -543,9 +582,8 @@ Fix:
 5. Copy `.env.lmstudio.example` to `.env`
 6. Replace the model names with the exact names shown by LM Studio
 7. Run `npm run setup:all`
-8. Run `cd backend`
-9. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
-10. Run `cd ..` and `npm run dev`
+8. If graph or ontology imports fail, run the optional backend package refresh from Step 7
+9. Run `npm run dev`
 
 ### All local via Ollama
 
@@ -556,9 +594,8 @@ Fix:
 5. Copy `.env.ollama.example` to `.env`
 6. Replace the model names if needed
 7. Run `npm run setup:all`
-8. Run `cd backend`
-9. Run `uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"`
-10. Run `cd ..` and `npm run dev`
+8. If graph or ontology imports fail, run the optional backend package refresh from Step 7
+9. Run `npm run dev`
 
 ## Final Reminder
 

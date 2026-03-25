@@ -20,6 +20,11 @@ From the repo root:
 
 ```powershell
 npm run setup:all
+```
+
+If you want to mirror the one-click scripts exactly, or you hit graph or ontology import errors during local work, also run:
+
+```powershell
 cd backend
 uv pip install "anthropic>=0.40.0" "graphiti-core==0.28.2" "neo4j==5.26.0"
 cd ..
@@ -35,6 +40,7 @@ npm run dev
 
 - Do not commit secrets, `.env` files, tokens, credentials, or local databases.
 - Keep `.env` examples and docs in sync with code changes.
+- Keep `README.md`, `SETUP.md`, and provider/setup notes in sync when workflow or report behavior changes.
 - Preserve AGPL notices, attribution, and license files.
 - Prefer small pull requests over large mixed changes.
 - Update setup or README content when developer workflow changes.

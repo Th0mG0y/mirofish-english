@@ -5,6 +5,7 @@ Multi-dimensional blind voting with confidence-weighted aggregation
 
 import json
 import re
+from difflib import get_close_matches
 from typing import Optional, List, Dict, Any
 
 from ..config import Config
@@ -128,6 +129,8 @@ Return JSON:
             dim_text += f"  Position A: {dim.position_a_label}\n"
             dim_text += f"  Position B: {dim.position_b_label}\n"
 
+        dimension_names = [dim.name for dim in session.vote_dimensions]
+
         # Generate votes for each agent
         for agent in agent_profiles[:20]:  # Cap at 20 agents
             agent_id = str(agent.get("agent_id", agent.get("id", "")))
@@ -142,12 +145,16 @@ You have observed the following debate between two analytical councils:
 
 Now vote on each dimension. For each, choose position_a, position_b, or neither, and assign a confidence stake (1-10, where 10 = absolute certainty).
 
+You must keep the dimension reference aligned with the list above.
+Return `dimension_index` using the number shown above, and copy the `dimension` name exactly as written.
+
 Dimensions:{dim_text}
 
 Return JSON:
 {{
     "votes": [
         {{
+            "dimension_index": 1,
             "dimension": "dimension name",
             "choice": "position_a" or "position_b" or "neither",
             "confidence_stake": 1-10,
@@ -173,10 +180,25 @@ Return JSON:
                 vote_data = json.loads(content.strip())
 
                 for v in vote_data.get("votes", []):
+                    resolved_dimension = self._resolve_dimension_name(
+                        raw_dimension=v.get("dimension", ""),
+                        dimensions=session.vote_dimensions,
+                        dimension_names=dimension_names,
+                        dimension_index=v.get("dimension_index"),
+                    )
+
+                    if not resolved_dimension:
+                        logger.warning(
+                            "Skipping vote from agent %s because the dimension could not be matched: %s",
+                            agent_id,
+                            v.get("dimension", ""),
+                        )
+                        continue
+
                     votes.append(Vote(
                         agent_id=agent_id,
-                        dimension=v.get("dimension", ""),
-                        choice=v.get("choice", "neither"),
+                        dimension=resolved_dimension,
+                        choice=self._normalize_choice(v.get("choice", "neither")),
                         confidence_stake=min(10, max(1, int(v.get("confidence_stake", 5)))),
                         justification=v.get("justification", "")
                     ))
@@ -186,6 +208,80 @@ Return JSON:
 
         logger.info(f"Voting complete: {len(votes)} votes from {len(agent_profiles)} agents")
         return votes
+
+    def _resolve_dimension_name(
+        self,
+        raw_dimension: Any,
+        dimensions: List[VoteDimension],
+        dimension_names: List[str],
+        dimension_index: Any = None,
+    ) -> Optional[str]:
+        if isinstance(dimension_index, str) and dimension_index.isdigit():
+            dimension_index = int(dimension_index)
+
+        if isinstance(dimension_index, int) and 1 <= dimension_index <= len(dimensions):
+            return dimensions[dimension_index - 1].name
+
+        if not raw_dimension:
+            return None
+
+        raw_dimension_text = str(raw_dimension).strip()
+        if not raw_dimension_text:
+            return None
+
+        normalized_lookup = {
+            self._normalize_dimension_key(dim.name): dim.name
+            for dim in dimensions
+        }
+
+        exact_match = normalized_lookup.get(self._normalize_dimension_key(raw_dimension_text))
+        if exact_match:
+            return exact_match
+
+        for dim in dimensions:
+            if raw_dimension_text.lower() == dim.name.lower():
+                return dim.name
+            if raw_dimension_text.lower() == dim.position_a_label.lower():
+                return dim.name
+            if raw_dimension_text.lower() == dim.position_b_label.lower():
+                return dim.name
+
+        if raw_dimension_text.lower().startswith("dimension "):
+            suffix = raw_dimension_text.split(" ", 1)[1].strip()
+            if suffix.isdigit():
+                suffix_index = int(suffix)
+                if 1 <= suffix_index <= len(dimensions):
+                    return dimensions[suffix_index - 1].name
+
+        close_matches = get_close_matches(
+            self._normalize_dimension_key(raw_dimension_text),
+            list(normalized_lookup.keys()),
+            n=1,
+            cutoff=0.72,
+        )
+        if close_matches:
+            return normalized_lookup[close_matches[0]]
+
+        return None
+
+    def _normalize_choice(self, raw_choice: Any) -> str:
+        normalized = str(raw_choice or "").strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "a": "position_a",
+            "positiona": "position_a",
+            "option_a": "position_a",
+            "b": "position_b",
+            "positionb": "position_b",
+            "option_b": "position_b",
+            "abstain": "neither",
+            "neutral": "neither",
+        }
+        if normalized in {"position_a", "position_b", "neither"}:
+            return normalized
+        return aliases.get(normalized, "neither")
+
+    def _normalize_dimension_key(self, value: str) -> str:
+        return re.sub(r'[^a-z0-9]+', '', value.lower())
 
     def aggregate_results(self, votes: List[Vote], dimensions: List[VoteDimension]) -> Dict[str, Any]:
         """
