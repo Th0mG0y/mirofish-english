@@ -124,6 +124,11 @@ class Config:
     OLLAMA_BASE_URL = _get_env('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
     OLLAMA_MODEL_NAME = _get_env('OLLAMA_MODEL_NAME', '')  # Falls back to LLM_MODEL_NAME
 
+    # Ollama configuration
+    OLLAMA_API_KEY = _get_env('OLLAMA_API_KEY')  # For Ollama cloud web search
+    OLLAMA_BASE_URL = _get_env('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
+    OLLAMA_MODEL_NAME = _get_env('OLLAMA_MODEL_NAME', '')  # Falls back to LLM_MODEL_NAME
+
     # Neo4j configuration
     NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
     NEO4J_USER = os.environ.get('NEO4J_USER', 'neo4j')
