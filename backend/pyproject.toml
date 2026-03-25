@@ -1,0 +1,81 @@
+[project]
+name = "mirofish-backend"
+version = "0.1.0"
+description = "MiroFish - A simple and universal collective intelligence engine that predicts everything"
+requires-python = ">=3.11"
+license = { text = "AGPL-3.0" }
+authors = [
+    { name = "MiroFish Team" }
+]
+
+dependencies = [
+    # Core framework
+    "flask>=3.1.3",
+    "flask-cors>=6.0.0",
+
+    # LLM related
+    "openai>=1.0.0",
+    "anthropic>=0.40.0",
+
+    # Zep Cloud
+    "zep-cloud==3.13.0",
+
+    # Graph memory (Graphiti)
+    "graphiti-core>=0.20.0",
+
+    # OASIS social media simulation
+    "camel-oasis==0.2.5",
+    "camel-ai==0.2.78",
+
+    # File handling
+    "PyMuPDF>=1.24.0",
+    # Encoding detection (supports non-UTF-8 encoded text files)
+    "charset-normalizer>=3.0.0",
+    "chardet>=5.0.0",
+
+    # Utility libraries
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[tool.uv]
+# Minimum versions to fix known vulnerabilities in transitive dependencies
+constraint-dependencies = [
+    "nltk>=3.9.3",
+    "urllib3>=2.6.3",
+    "tornado>=6.5.5",
+    "python-multipart>=0.0.22",
+    "cryptography>=46.0.5",
+    "PyJWT>=2.12.0",
+    "pypdf>=6.9.1",
+    "werkzeug>=3.1.6",
+    "marshmallow>=3.26.2",
+    "filelock>=3.20.3",
+    "virtualenv>=20.36.1",
+]
+# Override upstream pinned constraints to fix critical CVEs
+override-dependencies = [
+    "pillow>=12.1.1",          # camel-ai pins <11.0.0; CVE-2026-25990
+    "unstructured>=0.18.18",   # camel-oasis pins ==0.13.7; CVE-2025-64712
+    "neo4j>=5.26.0",           # camel-oasis pins ==5.23.0; graphiti-core needs >=5.26
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pipreqs>=0.5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
